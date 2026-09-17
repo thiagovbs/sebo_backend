@@ -1,0 +1,14 @@
+# Não copiar para a imagem: ambiente local, banco de dev, caches, segredos.
+.venv
+data
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+tests
+scripts
+.env
+Dockerfile
+docker-compose.yml
+.dockerignore

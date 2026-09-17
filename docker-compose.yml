@@ -1,0 +1,24 @@
+# Docker Compose do backend do Sebo On-Line (só o backend).
+# O frontend é publicado à parte (Render); aponte FRONTEND_ORIGIN, no .env,
+# para a URL do frontend no Render para liberar o CORS.
+services:
+  backend:
+    build: .
+    image: sebo-online-backend
+    container_name: sebo-online-backend
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    # Lê o .env do host: injeta as chaves como variáveis de ambiente
+    # (também alimenta ${PORT} do CMD).
+    env_file:
+      - .env
+    volumes:
+      # Monta o próprio .env em /app/.env (só leitura), para o pydantic
+      # (env_file=".env") lê-lo como no dev local.
+      - ./.env:/app/.env:ro
+      # Persiste o SQLite fora do container (sobrevive a rebuild/recriação).
+      - sebo-data:/app/data
+
+volumes:
+  sebo-data:
