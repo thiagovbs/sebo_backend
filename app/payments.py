@@ -163,6 +163,22 @@ class PaymentInitiatorClient:
         data = resp.json()
         return data if isinstance(data, list) else []
 
+    def revoke_enrollment(self, enrollment_id: str) -> dict:
+        """Revoga o dispositivo na iniciadora (DELETE /enrollments/{id}).
+
+        A iniciadora remove o vínculo (impede novos PIX JSR) e pede, best-effort,
+        a revogação na detentora. 404 = já não existe lá — tratamos como
+        idempotente para não travar a limpeza do lado da loja.
+        """
+        resp = self._request("DELETE", f"/enrollments/{enrollment_id}")
+        if resp.status_code in (200, 204, 404):
+            return _safe_json(resp) if resp.status_code == 200 else {"revoked": True}
+        raise PaymentInitiatorError(
+            "Iniciadora recusou a revogação do dispositivo",
+            status=resp.status_code,
+            detail=_safe_json(resp),
+        )
+
     def pay_jsr(self, amount: str, enrollment_id: str) -> dict:
         """Paga sem redirect com o dispositivo vinculado (jornada JSR).
 

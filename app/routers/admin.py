@@ -14,7 +14,8 @@ from sqlmodel import Session, select
 
 from ..adminauth import check_admin_password, create_admin_token, require_admin
 from ..db import get_session
-from ..integration import get_integration, is_configured, pix_qr_available
+from ..integration import get_client, get_integration, is_configured, pix_qr_available
+from ..payments import PaymentInitiatorError
 from ..models import (
     Address,
     Customer,
@@ -320,10 +321,21 @@ def delete_customer_device(
     device = session.exec(
         select(Device).where(Device.customer_id == customer_id)
     ).first()
+    initiator_revoked = None
     if device:
+        # Revoga também na iniciadora (best-effort): remove o vínculo lá e pede a
+        # revogação na detentora. Uma falha aqui não bloqueia a limpeza local.
+        if device.enrollment_id:
+            cfg = get_integration(session)
+            if is_configured(cfg):
+                try:
+                    get_client(cfg).revoke_enrollment(device.enrollment_id)
+                    initiator_revoked = True
+                except PaymentInitiatorError:
+                    initiator_revoked = False
         session.delete(device)
         session.commit()
-    return {"enrolled": False}
+    return {"enrolled": False, "initiator_revoked": initiator_revoked}
 
 
 def _as_date(value: datetime) -> date:

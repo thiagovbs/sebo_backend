@@ -38,6 +38,12 @@ class FakeInitiator:
         """Simula o cliente concluindo o vínculo no banco."""
         self._devices[enrollment_id] = "REGISTERED"
 
+    def revoke_enrollment(self, enrollment_id):
+        if self.down:
+            raise PaymentInitiatorError("Iniciadora inacessível: ConnectError")
+        self._devices.pop(enrollment_id, None)
+        return {"revoked": True, "core_revoked": False}
+
     def list_devices(self):
         if self.down:
             raise PaymentInitiatorError("Iniciadora inacessível: ConnectError")
