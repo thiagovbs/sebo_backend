@@ -303,6 +303,29 @@ def customer_detail(customer_id: int, session: Session = Depends(get_session)) -
     }
 
 
+@router.delete("/customers/{customer_id}/device", dependencies=[_admin])
+def delete_customer_device(
+    customer_id: int, session: Session = Depends(get_session)
+) -> dict:
+    """Apaga a autorização de pagamento (PIX Open Finance) do cliente.
+
+    Remove o ``Device`` (o ``enrollment_id`` que a loja usa em ``/payments/jsr``).
+    O cliente volta a "não autorizado" e pode autorizar de novo. Não revoga na
+    iniciadora/core (lá não há endpoint de revogação); do lado da loja, a
+    autorização deixa de existir.
+    """
+    customer = session.get(Customer, customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    device = session.exec(
+        select(Device).where(Device.customer_id == customer_id)
+    ).first()
+    if device:
+        session.delete(device)
+        session.commit()
+    return {"enrolled": False}
+
+
 def _as_date(value: datetime) -> date:
     return value.date() if isinstance(value, datetime) else value
 

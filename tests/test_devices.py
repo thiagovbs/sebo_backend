@@ -42,3 +42,22 @@ def test_enroll_when_initiator_is_down_returns_502(client, customer, fake_initia
     fake_initiator.down = True
     r = client.post(f"/customers/{customer['id']}/device/enroll")
     assert r.status_code == 502
+
+
+def test_admin_can_delete_a_customers_authorization(client, customer, fake_initiator, admin_headers):
+    eid = client.post(f"/customers/{customer['id']}/device/enroll").json()["enrollment_id"]
+    fake_initiator.register(eid)
+    assert client.get(f"/customers/{customer['id']}/device").json()["status"] == "REGISTERED"
+
+    r = client.delete(f"/admin/customers/{customer['id']}/device", headers=admin_headers)
+    assert r.status_code == 200
+    assert r.json()["enrolled"] is False
+
+    # Depois de apagada, o cliente volta a "não autorizado" e pode re-autorizar.
+    assert client.get(f"/customers/{customer['id']}/device").json()["enrolled"] is False
+
+
+def test_delete_device_requires_admin(client, customer, fake_initiator):
+    client.post(f"/customers/{customer['id']}/device/enroll")
+    # Sem token de admin (o header padrão é o do cliente) -> negado.
+    assert client.delete(f"/admin/customers/{customer['id']}/device").status_code == 401
