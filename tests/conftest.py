@@ -26,7 +26,7 @@ class FakeInitiator:
         self._devices: dict[str, str] = {}  # enrollment_id -> status
         self._counter = 0
 
-    def start_enrollment(self, username, account_number=""):
+    def start_enrollment(self, username, account_number="", redirect_uri=""):
         if self.down:
             raise PaymentInitiatorError("Iniciadora inacessível: ConnectError")
         self._counter += 1

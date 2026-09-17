@@ -9,6 +9,7 @@ depois disso o pagamento é sem redirect.
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from ..config import settings
 from ..custauth import current_customer, ensure_self
 from ..db import get_session
 from ..integration import get_client, get_integration, is_configured
@@ -104,9 +105,15 @@ def enroll_device(
     cfg = get_integration(session)
     if not is_configured(cfg):
         raise _unavailable()
+    # Ao concluir, a iniciadora devolve o cliente para cá (a página "Minha
+    # conta" do front), com o resultado na query — jornada sem página morta.
+    redirect_uri = f"{settings.frontend_origin.rstrip('/')}/conta?enroll=return"
     try:
         # username = o titular (o cliente pagador); é ele quem autoriza o Sebo.
-        result = get_client(cfg).start_enrollment(username=customer.name or customer.email)
+        result = get_client(cfg).start_enrollment(
+            username=customer.name or customer.email,
+            redirect_uri=redirect_uri,
+        )
     except PaymentInitiatorError as exc:
         raise HTTPException(
             status_code=502,

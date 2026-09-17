@@ -125,19 +125,24 @@ class PaymentInitiatorClient:
 
     # -- Jornada JSR (dispositivo do titular) ------------------------------
 
-    def start_enrollment(self, username: str, account_number: str = "") -> dict:
+    def start_enrollment(
+        self, username: str, account_number: str = "", redirect_uri: str = ""
+    ) -> dict:
         """Inicia a autorização do pagador. Devolve enrollment_id + login_url.
 
         ``username`` é o titular (o cliente que vai pagar), que autoriza o Sebo —
         o site age como o dispositivo a ser autorizado. O cliente abre o
         ``login_url`` e autentica no seu banco; a iniciadora conclui o cadastro e
         o marca como REGISTERED.
+
+        ``redirect_uri`` (opcional) é para onde a iniciadora deve devolver o
+        navegador ao concluir — assim o cliente volta direto ao Sebo em vez de
+        parar numa página da iniciadora. Precisa estar na allow-list dela.
         """
-        resp = self._request(
-            "POST",
-            "/enrollments",
-            json={"username": username, "account_number": account_number},
-        )
+        body = {"username": username, "account_number": account_number}
+        if redirect_uri:
+            body["redirect_uri"] = redirect_uri
+        resp = self._request("POST", "/enrollments", json=body)
         if resp.status_code not in (200, 201):
             raise PaymentInitiatorError(
                 "Iniciadora recusou o cadastro do dispositivo",
