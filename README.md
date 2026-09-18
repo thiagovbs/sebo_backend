@@ -25,10 +25,15 @@ O frontend fica em outro repositório ([`sebo_frontend`](https://github.com/thia
   Cada cliente só acessa os próprios dados (token).
 - **Carrinho e pedidos** — um carrinho por cliente, com controle de estoque, e
   histórico de pedidos.
-- **Dois métodos de PIX no checkout:**
+- **Três jornadas de PIX no checkout:**
   - **PIX QR clássico (copia e cola)** — a loja gera o BR Code da própria chave
     PIX; o cliente paga no app do banco. Não usa a iniciadora.
-  - **PIX Open Finance (jornada JSR)** — o cliente autoriza o Sebo uma vez
+  - **PIX Open Finance com redirect (consentimento único)** — sobre um pedido
+    PIX QR em aberto, o cliente pode autorizar direto no seu banco: a loja cria
+    um consentimento único na iniciadora (`POST /payments`, amarrado ao CPF do
+    cliente) e o leva à detentora para aprovar aquele pagamento; na volta, o
+    pedido é reconciliado (`GET /payments/{consent_id}`) e marcado como pago.
+  - **PIX Open Finance JSR (sem redirect)** — o cliente autoriza o Sebo uma vez
     (autenticando no banco) e paga **sem redirect**; o pedido nasce já pago.
 - **Painel de admin** (`/admin`) — protegido por senha: dashboard de vendas,
   cadastro/edição de produtos, pedidos, clientes e a seção **Integração** (dados
