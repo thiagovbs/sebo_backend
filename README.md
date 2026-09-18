@@ -9,10 +9,22 @@ produtos de **qualquer categoria**, novos ou usados, e o checkout paga via
 O frontend fica em outro repositório ([`sebo_frontend`](https://github.com/thiagovbs/sebo_frontend)).
 
 ```
-┌────────────┐   REST    ┌────────────┐  login+PIX  ┌──────────────────┐  PISP   ┌──────────────┐
-│  Frontend  │──────────▶│  Backend   │────────────▶│ payment-initiator │────────▶│ core-banking │
-│ React/Vite │           │  (este)    │ (sebo_online)│     (PISP)       │         │ (detentora)  │
-└────────────┘           └────────────┘             └──────────────────┘         └──────────────┘
+┌────────────┐  REST   ┌───────────────────┐   PISP   ┌──────────────┐        ┌──────────────┐
+│  Frontend  │────────▶│      Backend      │─────────▶│ payment-     │───────▶│ core-banking │
+│ React/Vite │         │   (sebo_online)   │          │ initiator    │        │ (detentora)  │
+└────────────┘         │  FastAPI + SQLite │          │ (iniciadora) │        └──────────────┘
+                       └───────────────────┘          └──────────────┘
+
+Três jornadas de PIX no checkout
+────────────────────────────────
+1) QR clássico       Backend gera o BR Code da chave do Sebo → cliente paga no
+   (copia e cola)    app do banco. Não passa pela iniciadora.
+
+2) OF com redirect   Backend → iniciadora cria o consentimento único → cliente
+   (consent. único)  aprova na detentora e volta ao checkout → pedido reconciliado.
+
+3) OF JSR            Cliente autoriza o Sebo uma vez (enrollment na detentora);
+   (sem redirect)    depois Backend → iniciadora paga direto → pedido nasce pago.
 ```
 
 ## O que tem
