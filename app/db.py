@@ -27,6 +27,7 @@ _MIGRATIONS = {
     "order": {
         "payment_method": "VARCHAR DEFAULT 'jsr'",
         "pix_code": "VARCHAR DEFAULT ''",
+        "updated_at": "DATETIME",
     },
     "integrationsettings": {"sebo_city": "VARCHAR DEFAULT 'SAO PAULO'"},
 }
@@ -73,6 +74,11 @@ def _add_missing_columns() -> None:
                     session.execute(
                         text(f'ALTER TABLE "{table}" ADD COLUMN {name} {ddl}')
                     )
+        # Pedido antigo nasce sem updated_at; sem preencher, a leitura devolve
+        # None num campo que não aceita nulo.
+        session.execute(
+            text('UPDATE "order" SET updated_at = created_at WHERE updated_at IS NULL')
+        )
         session.commit()
 
 

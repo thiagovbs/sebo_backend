@@ -11,7 +11,7 @@ iniciar PIX na conta dele, uma vez (ver ``routers/devices.py``). No checkout:
 4. como o JSR conclui na hora, o pedido nasce já ``PAID``.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..config import settings
@@ -19,6 +19,7 @@ from ..custauth import current_customer, ensure_self
 from ..db import get_session
 from ..integration import get_client, get_integration, is_configured, pix_qr_available
 from ..models import Cart, CartItem, Customer, Order, OrderItem, Product
+from ..omnicommerce import enqueue_order_event, flush_in_background
 from ..payments import PaymentInitiatorError
 from ..pix import build_br_code
 from ..routers.devices import get_device
@@ -30,6 +31,21 @@ router = APIRouter(prefix="/orders", tags=["pedidos"])
 
 def _items_of(session: Session, order: Order) -> list[OrderItem]:
     return session.exec(select(OrderItem).where(OrderItem.order_id == order.id)).all()
+
+
+def _notify_omnicommerce(
+    session: Session, order: Order, background: BackgroundTasks
+) -> None:
+    """Enfileira o aviso do pedido e tenta entregar depois de responder.
+
+    Chamado sempre DEPOIS de os itens estarem gravados: o omnicommerce lê o
+    pedido assim que recebe o aviso, e um pedido sem itens seria recusado.
+    """
+    if enqueue_order_event(session, order) is None:
+        return
+    session.commit()
+    session.refresh(order)
+    background.add_task(flush_in_background)
 
 
 def _need_enrollment(message: str, login_url: str = "") -> HTTPException:
@@ -47,6 +63,7 @@ def _need_enrollment(message: str, login_url: str = "") -> HTTPException:
 @router.post("/checkout", response_model=OrderOut, status_code=201)
 def checkout(
     data: CheckoutIn,
+    background: BackgroundTasks,
     session: Session = Depends(get_session),
     customer: Customer = Depends(current_customer),
 ) -> OrderOut:
@@ -131,6 +148,7 @@ def checkout(
         session.add(order)
         _persist_items(order)
         session.refresh(order)
+        _notify_omnicommerce(session, order, background)
         return order_to_out(order, _items_of(session, order))
 
     # --- PIX JSR (Open Finance, sem redirect) -----------------------------
@@ -191,6 +209,7 @@ def checkout(
     session.refresh(order)
     _persist_items(order)
     session.refresh(order)
+    _notify_omnicommerce(session, order, background)
     return order_to_out(order, _items_of(session, order))
 
 
@@ -211,6 +230,7 @@ def get_order(order_id: int, session: Session = Depends(get_session)) -> OrderOu
 @router.post("/{order_id}/confirm-pix", response_model=OrderOut)
 def confirm_pix(
     order_id: int,
+    background: BackgroundTasks,
     session: Session = Depends(get_session),
     customer: Customer = Depends(current_customer),
 ) -> OrderOut:
@@ -236,6 +256,7 @@ def confirm_pix(
     session.add(order)
     session.commit()
     session.refresh(order)
+    _notify_omnicommerce(session, order, background)
     return order_to_out(order, _items_of(session, order))
 
 
@@ -299,6 +320,7 @@ def start_openfinance_redirect(
 @router.post("/{order_id}/confirm-openfinance", response_model=OrderOut)
 def confirm_openfinance(
     order_id: int,
+    background: BackgroundTasks,
     session: Session = Depends(get_session),
     customer: Customer = Depends(current_customer),
 ) -> OrderOut:
@@ -330,6 +352,7 @@ def confirm_openfinance(
             detail={"error": "STATUS_FAILED", "message": str(exc), "initiator": exc.detail},
         ) from exc
 
+    status_anterior = order.status
     status = (st.get("status") or "").upper()
     order.payment_status = status
     order.payment_id = st.get("payment_id", "") or order.payment_id
@@ -340,11 +363,17 @@ def confirm_openfinance(
     session.add(order)
     session.commit()
     session.refresh(order)
+    if order.status != status_anterior:
+        _notify_omnicommerce(session, order, background)
     return order_to_out(order, _items_of(session, order))
 
 
 @router.post("/{order_id}/cancel", response_model=OrderOut)
-def cancel_order(order_id: int, session: Session = Depends(get_session)) -> OrderOut:
+def cancel_order(
+    order_id: int,
+    background: BackgroundTasks,
+    session: Session = Depends(get_session),
+) -> OrderOut:
     """Cancela um pedido ainda não pago e devolve os itens ao estoque."""
     order = session.get(Order, order_id)
     if not order:
@@ -363,4 +392,5 @@ def cancel_order(order_id: int, session: Session = Depends(get_session)) -> Orde
     session.add(order)
     session.commit()
     session.refresh(order)
+    _notify_omnicommerce(session, order, background)
     return order_to_out(order, _items_of(session, order))

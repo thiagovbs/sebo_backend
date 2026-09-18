@@ -9,7 +9,16 @@ from .adminauth import warn_on_dev_defaults
 from .custauth import warn_on_dev_secret
 from .config import settings
 from .db import init_db
-from .routers import admin, cart, customers, devices, openfinance, orders, products
+from .routers import (
+    admin,
+    cart,
+    customers,
+    devices,
+    integration,
+    openfinance,
+    orders,
+    products,
+)
 from .seed import seed_if_empty
 
 
@@ -42,6 +51,7 @@ app.include_router(cart.router)
 app.include_router(orders.router)
 app.include_router(admin.router)
 app.include_router(openfinance.router)
+app.include_router(integration.router)
 
 
 @app.get("/health", tags=["infra"])

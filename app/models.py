@@ -194,6 +194,13 @@ class Order(SQLModel, table=True):
     payment_status: str = ""
     pix_code: str = ""  # BR Code (copia e cola) quando payment_method == pix_qr
 
+    # Avança a cada gravação (``onupdate`` é do próprio SQLAlchemy, então nenhum
+    # ponto de escrita precisa lembrar de atualizar). É o carimbo que o
+    # omnicommerce usa para descartar evento que chega fora de ordem.
+    updated_at: datetime = Field(
+        default_factory=_now, sa_column_kwargs={"onupdate": _now}
+    )
+
 
 class OrderItem(SQLModel, table=True):
     """Item do pedido. Nome e preço são fotografados do produto na compra."""
@@ -204,3 +211,30 @@ class OrderItem(SQLModel, table=True):
     name: str = ""
     unit_price: float = 0.0
     quantity: int = 1
+
+
+# ---------------------------------------------------------------------------
+# Integração com o omnicommerce
+# ---------------------------------------------------------------------------
+
+
+class OutboxNotification(SQLModel, table=True):
+    """Aviso de pedido a entregar ao omnicommerce.
+
+    Existe para não perder venda: o POST direto falharia em silêncio numa
+    queda de rede. A linha é gravada junto com a mudança do pedido e só sai
+    da fila quando o destino confirma.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    order_id: int = Field(index=True, foreign_key="order.id")
+    topic: str = "orders"
+    # Vai no campo ``sent`` do aviso e é estável entre tentativas: é o que dá
+    # identidade ao evento do outro lado, evitando duplicar na repetição.
+    sent_at: datetime = Field(default_factory=_now)
+    status: str = Field(default="PENDING", index=True)  # PENDING | DELIVERED | FAILED
+    attempts: int = 0
+    next_attempt_at: datetime = Field(default_factory=_now, index=True)
+    last_error: str = ""
+    delivered_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=_now)

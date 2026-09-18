@@ -33,6 +33,19 @@ class Settings(BaseSettings):
     customer_secret: str = "dev-insecure-customer-secret-change-me"
     customer_token_hours: int = 72
 
+    # --- Integração com o omnicommerce --------------------------------------
+    # URL completa do webhook, com o segredo no caminho. Vazia desliga o envio:
+    # o aviso nem é enfileirado, e a loja segue funcionando normalmente.
+    omnicommerce_webhook_url: str = ""
+    # Token que o omnicommerce apresenta para ler /integration/orders/{id}.
+    # Vazio recusa toda leitura: falha fechada.
+    integration_token: str = ""
+    # Identifica esta loja no aviso; precisa casar com externalAccountId da
+    # conexão cadastrada no omnicommerce.
+    store_id: str = "sebo_online"
+    # Quantas vezes insistir antes de marcar o aviso como falho.
+    notification_max_attempts: int = 8
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
