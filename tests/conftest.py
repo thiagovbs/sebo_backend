@@ -24,6 +24,8 @@ class FakeInitiator:
     def __init__(self):
         self.down = False
         self._devices: dict[str, str] = {}  # enrollment_id -> status
+        self._payments: dict[str, dict] = {}  # consent_id -> {status, payment_id}
+        self.last_consent = None  # último consentimento criado (para os testes)
         self._counter = 0
 
     def start_enrollment(self, username, account_number="", redirect_uri=""):
@@ -60,6 +62,35 @@ class FakeInitiator:
             return {"payment_id": "pay-test", "consent_id": "con-test", "status": "COMPLETED"}
         return {"need_enrollment": True, "login_url": "http://banco/enroll",
                 "message": "Dispositivo não vinculado"}
+
+    # -- Jornada de pagamento com redirect (consentimento único) -------------
+
+    def create_payment(self, amount, debtor_cpf="", redirect_uri=""):
+        if self.down:
+            raise PaymentInitiatorError("Iniciadora inacessível: ConnectError")
+        self._counter += 1
+        cid = f"consent-{self._counter}"
+        self._payments[cid] = {"status": "AWAITING_AUTHORISATION", "payment_id": ""}
+        self.last_consent = cid
+        return {"consent_id": cid, "status": "AWAITING_AUTHORISATION",
+                "authorisation_url": f"http://banco/auth/{cid}"}
+
+    def authorise_payment(self, consent_id):
+        """Simula o titular aprovando na detentora (pagamento submetido)."""
+        p = self._payments.get(consent_id)
+        if p:
+            p["status"] = "COMPLETED"
+            p["payment_id"] = f"pay-{consent_id}"
+
+    def reject_payment(self, consent_id):
+        p = self._payments.get(consent_id)
+        if p:
+            p["status"] = "REJECTED"
+
+    def get_status(self, identifier):
+        if self.down:
+            raise PaymentInitiatorError("Iniciadora inacessível: ConnectError")
+        return self._payments.get(identifier, {"status": "NOT_FOUND"})
 
 
 def _configure_integration():

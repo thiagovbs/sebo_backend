@@ -89,14 +89,18 @@ class PaymentInitiatorClient:
     # -- Operações ---------------------------------------------------------
 
     def create_payment(
-        self, amount: str, description: str, debtor: dict | None = None
+        self, amount: str, debtor_cpf: str = "", redirect_uri: str = ""
     ) -> dict:
-        """Inicia o pagamento PIX com redirect. Devolve request_id + login_url.
+        """Inicia o pagamento PIX com redirect (consentimento único).
 
-        ``debtor`` leva os dados do pagador (nome, CPF, chave PIX) montados a
-        partir do cadastro do cliente. A iniciadora ignora campos que ainda não
-        consome, então mandá-los já deixa a integração pronta para quando ela
-        passar a identificar o pagador.
+        Devolve ``{consent_id, status, authorisation_url}``: a iniciadora cria o
+        consentimento na detentora e devolve a URL onde o titular revisa valor e
+        credor e aprova. Só depois da aprovação o pagamento é submetido.
+
+        ``debtor_cpf`` (o CPF do cliente logado) amarra o consentimento ao
+        titular: só ele consegue aprovar na detentora. ``redirect_uri`` é para
+        onde a detentora/iniciadora devolvem o navegador ao fim (precisa estar
+        na allow-list da iniciadora).
         """
         body = {
             "amount": amount,
@@ -108,8 +112,10 @@ class PaymentInitiatorClient:
                 "value": self.sebo_pix_key_value,
             },
         }
-        if debtor:
-            body["debtor"] = debtor
+        if debtor_cpf:
+            body["debtor_cpf"] = debtor_cpf
+        if redirect_uri:
+            body["redirect_uri"] = redirect_uri
         resp = self._request("POST", "/payments", json=body)
         if resp.status_code not in (200, 201):
             raise PaymentInitiatorError(
@@ -119,8 +125,9 @@ class PaymentInitiatorClient:
             )
         data = resp.json()
         return {
-            "request_id": data.get("request_id", ""),
-            "login_url": data.get("login_url", ""),
+            "consent_id": data.get("consent_id", ""),
+            "status": data.get("status", ""),
+            "authorisation_url": data.get("authorisation_url", ""),
         }
 
     # -- Jornada JSR (dispositivo do titular) ------------------------------

@@ -19,10 +19,12 @@ def status(session: Session = Depends(get_session)) -> dict:
     """Métodos de pagamento disponíveis para o cliente.
 
     - ``jsr``: PIX Open Finance sem redirect (precisa da iniciadora configurada).
+    - ``redirect``: PIX Open Finance com redirect (mesma exigência do JSR:
+      iniciadora + recebedor). Oferecido como opção na tela do PIX QR.
     - ``pix_qr``: PIX QR clássico / copia e cola (precisa só do recebedor).
     - ``available``: compat — true se qualquer método estiver disponível.
     """
     cfg = get_integration(session)
     jsr = is_configured(cfg)
     pix = pix_qr_available(cfg)
-    return {"jsr": jsr, "pix_qr": pix, "available": jsr or pix}
+    return {"jsr": jsr, "redirect": jsr, "pix_qr": pix, "available": jsr or pix}

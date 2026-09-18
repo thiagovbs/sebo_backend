@@ -14,6 +14,7 @@ iniciar PIX na conta dele, uma vez (ver ``routers/devices.py``). No checkout:
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from ..config import settings
 from ..custauth import current_customer, ensure_self
 from ..db import get_session
 from ..integration import get_client, get_integration, is_configured, pix_qr_available
@@ -232,6 +233,110 @@ def confirm_pix(
 
     order.status = "PAID"
     order.payment_status = "COMPLETED"
+    session.add(order)
+    session.commit()
+    session.refresh(order)
+    return order_to_out(order, _items_of(session, order))
+
+
+@router.post("/{order_id}/openfinance", response_model=OrderOut)
+def start_openfinance_redirect(
+    order_id: int,
+    session: Session = Depends(get_session),
+    customer: Customer = Depends(current_customer),
+) -> OrderOut:
+    """Inicia a jornada de pagamento com **redirect** (consentimento único).
+
+    Alternativa ao copia-e-cola para um pedido PIX QR ainda em aberto: a loja
+    pede à iniciadora um pagamento (``POST /payments``) do valor do pedido para a
+    chave do Sebo, amarrado ao CPF do cliente, e devolve a ``authorisation_url``
+    (em ``payment_login_url``). O cliente autoriza na detentora e volta.
+    """
+    order = session.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    ensure_self(customer, order.customer_id)
+    if order.payment_method != "pix_qr":
+        raise HTTPException(status_code=409, detail="Pedido não é PIX QR")
+    if order.status != "AWAITING_PAYMENT":
+        raise HTTPException(status_code=409, detail=f"Pedido está {order.status}")
+
+    cfg = get_integration(session)
+    if not is_configured(cfg):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "OPEN_FINANCE_UNAVAILABLE",
+                "message": "Pagamento por Open Finance não está disponível no momento.",
+            },
+        )
+
+    # Ao aprovar na detentora, o cliente volta para o checkout deste pedido.
+    redirect_uri = (
+        f"{settings.frontend_origin.rstrip('/')}/checkout?order={order.id}&pay=return"
+    )
+    try:
+        result = get_client(cfg).create_payment(
+            f"{order.total:.2f}",
+            debtor_cpf=customer.cpf or "",
+            redirect_uri=redirect_uri,
+        )
+    except PaymentInitiatorError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "PAYMENT_FAILED", "message": str(exc), "initiator": exc.detail},
+        ) from exc
+
+    order.payment_consent_id = result["consent_id"]
+    order.payment_login_url = result["authorisation_url"]
+    order.payment_status = result.get("status", "AWAITING_AUTHORISATION")
+    session.add(order)
+    session.commit()
+    session.refresh(order)
+    return order_to_out(order, _items_of(session, order))
+
+
+@router.post("/{order_id}/confirm-openfinance", response_model=OrderOut)
+def confirm_openfinance(
+    order_id: int,
+    session: Session = Depends(get_session),
+    customer: Customer = Depends(current_customer),
+) -> OrderOut:
+    """Reconciliação: consulta o pagamento na iniciadora e marca o pedido.
+
+    Chamado quando o cliente volta da detentora. A fonte da verdade é a
+    iniciadora (``GET /payments/{consent_id}``), não o parâmetro da URL: se há
+    ``payment_id`` e o status não é recusado, o pedido vira ``PAID``.
+    """
+    order = session.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    ensure_self(customer, order.customer_id)
+    if order.payment_method != "pix_qr":
+        raise HTTPException(status_code=409, detail="Pedido não é PIX QR")
+    if order.status == "PAID":
+        return order_to_out(order, _items_of(session, order))
+    if not order.payment_consent_id:
+        raise HTTPException(
+            status_code=409, detail="Pagamento por Open Finance não foi iniciado"
+        )
+
+    cfg = get_integration(session)
+    try:
+        st = get_client(cfg).get_status(order.payment_consent_id)
+    except PaymentInitiatorError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "STATUS_FAILED", "message": str(exc), "initiator": exc.detail},
+        ) from exc
+
+    status = (st.get("status") or "").upper()
+    order.payment_status = status
+    order.payment_id = st.get("payment_id", "") or order.payment_id
+    # Submetido (tem payment_id) e não recusado => pago. O pedido nasceu
+    # AWAITING_PAYMENT com o estoque já baixado no checkout; só falta o pago.
+    if order.payment_id and status not in ("REJECTED", "CANCELLED"):
+        order.status = "PAID"
     session.add(order)
     session.commit()
     session.refresh(order)
