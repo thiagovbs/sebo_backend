@@ -53,6 +53,10 @@ class Product(SQLModel, table=True):
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    #: Identificação do produto no sistema que o publicou aqui (o omnicommerce).
+    #: É a chave de idempotência da publicação: republicar o mesmo SKU atualiza
+    #: o produto em vez de criar um segundo. Vazio em produto cadastrado à mão.
+    external_sku: str = Field(default="", index=True)
     name: str = Field(index=True)
     description: str = ""
     category: str = Field(default="", index=True)

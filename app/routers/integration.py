@@ -15,8 +15,9 @@ from sqlmodel import Session, select
 
 from ..config import settings
 from ..db import get_session
-from ..models import Customer, Order, OrderItem
+from ..models import Customer, Order, OrderItem, Product
 from ..omnicommerce import flush
+from ..schemas import ProductOut, ProductPublishIn
 
 router = APIRouter(prefix="/integration", tags=["integração"])
 
@@ -92,6 +93,13 @@ def read_order(order_id: int, session: Session = Depends(get_session)) -> dict:
         select(OrderItem).where(OrderItem.order_id == order.id)
     ).all()
     customer = session.get(Customer, order.customer_id)
+    # O SKU liga o item de volta ao catálogo de quem publicou, que é o que
+    # permite baixar estoque lá. Produto cadastrado à mão não tem SKU, e o
+    # campo vai vazio em vez de ausente: o contrato é o mesmo para todo item.
+    skus = {
+        item.product_id: (session.get(Product, item.product_id) or Product()).external_sku
+        for item in items
+    }
     return {
         "id": order.id,
         "status": order.status,
@@ -105,6 +113,7 @@ def read_order(order_id: int, session: Session = Depends(get_session)) -> dict:
         "items": [
             {
                 "product_id": item.product_id,
+                "sku": skus.get(item.product_id, ""),
                 "name": item.name,
                 "unit_price": round(item.unit_price, 2),
                 "quantity": item.quantity,
@@ -118,3 +127,49 @@ def read_order(order_id: int, session: Session = Depends(get_session)) -> dict:
 def flush_outbox(session: Session = Depends(get_session)) -> dict:
     """Reenvia avisos pendentes. Idempotente; serve para recuperar na mão."""
     return flush(session)
+
+
+# ---------------------------------------------------------------------------
+# Catálogo publicado de fora
+# ---------------------------------------------------------------------------
+
+
+@router.post("/products", response_model=ProductOut, dependencies=[_service])
+def publish_product(
+    payload: ProductPublishIn, session: Session = Depends(get_session)
+) -> Product:
+    """Publica (ou republica) um produto vindo de outro sistema.
+
+    Idempotente pelo ``sku``: se já existe produto com aquele SKU, ele é
+    atualizado e o mesmo id volta. É o que impede que uma retentativa, depois
+    de uma resposta que se perdeu no caminho, crie um segundo anúncio do mesmo
+    item — do outro lado não há transação que abranja a nossa escrita.
+    """
+    dados = payload.model_dump()
+    sku = dados.pop("sku").strip().upper()
+    if not sku:
+        raise HTTPException(status_code=400, detail="sku inválido")
+
+    produto = session.exec(
+        select(Product).where(Product.external_sku == sku)
+    ).first()
+    if produto is None:
+        produto = Product(external_sku=sku, **dados)
+    else:
+        for campo, valor in dados.items():
+            setattr(produto, campo, valor)
+    session.add(produto)
+    session.commit()
+    session.refresh(produto)
+    return produto
+
+
+@router.get("/products/{product_id}", response_model=ProductOut, dependencies=[_service])
+def read_published_product(
+    product_id: int, session: Session = Depends(get_session)
+) -> Product:
+    """Estado atual do produto, para o outro lado conferir o que publicou."""
+    produto = session.get(Product, product_id)
+    if not produto:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+    return produto

@@ -30,6 +30,7 @@ _MIGRATIONS = {
         "updated_at": "DATETIME",
     },
     "integrationsettings": {"sebo_city": "VARCHAR DEFAULT 'SAO PAULO'"},
+    "product": {"external_sku": "VARCHAR DEFAULT ''"},
 }
 
 

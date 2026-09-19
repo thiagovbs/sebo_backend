@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 import app.omnicommerce as omni
 from app.config import settings
 from app.db import engine
-from app.models import Order, OutboxNotification
+from app.models import Order, OutboxNotification, Product
 from tests.conftest import enroll_and_register
 
 TOKEN = "token-de-servico-de-teste"
@@ -97,6 +97,9 @@ def test_order_payload_matches_the_contract(
     assert corpo["items"] == [
         {
             "product_id": product["id"],
+            # Presente mesmo vazio: produto cadastrado à mão não tem SKU, e o
+            # consumidor recebe sempre a mesma forma de item.
+            "sku": "",
             "name": product["name"],
             "unit_price": product["price"],
             "quantity": 2,
@@ -322,3 +325,98 @@ def test_updated_at_advances_on_every_change(
     with Session(engine) as session:
         depois = omni._as_utc(session.get(Order, pedido["id"]).updated_at)
     assert depois > antes
+
+
+# ---------------------------------------------------------------------------
+# Catálogo publicado de fora
+# ---------------------------------------------------------------------------
+
+
+def _publicar(client, headers, **campos):
+    corpo = {
+        "sku": "LIVRO-001",
+        "name": "Livro publicado pelo omnicommerce",
+        "description": "Descrição",
+        "category": "Livros",
+        "price": 49.9,
+        "stock": 7,
+        "brand": "Editora",
+        "condition": "usado",
+        "active": True,
+    }
+    corpo.update(campos)
+    return client.post("/integration/products", json=corpo, headers=headers)
+
+
+def test_publishing_a_product_requires_the_service_token(client):
+    assert _publicar(client, {}).status_code == 401
+    assert _publicar(client, {"Authorization": "Bearer errado"}).status_code == 401
+
+
+def test_publishing_creates_the_product_with_the_values_sent(client, service_headers):
+    r = _publicar(client, service_headers)
+    assert r.status_code == 200
+    corpo = r.json()
+    assert corpo["name"] == "Livro publicado pelo omnicommerce"
+    assert corpo["price"] == 49.9
+    assert corpo["stock"] == 7
+    assert corpo["active"] is True
+
+    # Aparece na vitrine como qualquer outro produto.
+    vitrine = client.get("/products").json()["items"]
+    assert corpo["id"] in [p["id"] for p in vitrine]
+
+
+def test_republishing_the_same_sku_updates_instead_of_duplicating(client, service_headers):
+    primeiro = _publicar(client, service_headers).json()
+    segundo = _publicar(client, service_headers, price=59.9, stock=3).json()
+
+    # O mesmo id volta: uma retentativa não cria um segundo anúncio.
+    assert segundo["id"] == primeiro["id"]
+    assert segundo["price"] == 59.9
+    assert segundo["stock"] == 3
+
+    with Session(engine) as session:
+        iguais = session.exec(
+            select(Product).where(Product.external_sku == "LIVRO-001")
+        ).all()
+    assert len(iguais) == 1
+
+
+def test_sku_is_normalized_to_upper_case(client, service_headers):
+    criado = _publicar(client, service_headers, sku="livro-002").json()
+    with Session(engine) as session:
+        assert session.get(Product, criado["id"]).external_sku == "LIVRO-002"
+    # E o mesmo SKU em minúsculas encontra o mesmo produto.
+    assert _publicar(client, service_headers, sku="LIVRO-002").json()["id"] == criado["id"]
+
+
+def test_reading_a_published_product_back(client, service_headers):
+    criado = _publicar(client, service_headers).json()
+    lido = client.get(f"/integration/products/{criado['id']}", headers=service_headers)
+    assert lido.status_code == 200
+    assert lido.json()["stock"] == 7
+    assert client.get("/integration/products/999999", headers=service_headers).status_code == 404
+
+
+def test_order_items_carry_the_sku_so_the_publisher_can_debit_stock(
+    client, customer, product, fake_initiator, service_headers
+):
+    # Produto da fixture não nasceu de publicação: SKU vazio, campo presente.
+    pedido = _comprar(client, customer, product, fake_initiator)
+    item = client.get(
+        f"/integration/orders/{pedido['id']}", headers=service_headers
+    ).json()["items"][0]
+    assert item["sku"] == ""
+
+    # Já um produto publicado carrega o SKU de volta no pedido.
+    publicado = _publicar(client, service_headers, stock=5).json()
+    client.post(
+        f"/cart/{customer['id']}/items",
+        json={"product_id": publicado["id"], "quantity": 1},
+    )
+    novo = client.post("/orders/checkout", json={"customer_id": customer["id"]}).json()
+    itens = client.get(
+        f"/integration/orders/{novo['id']}", headers=service_headers
+    ).json()["items"]
+    assert [i["sku"] for i in itens] == ["LIVRO-001"]

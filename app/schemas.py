@@ -28,6 +28,17 @@ class ProductOut(ProductIn):
     created_at: datetime
 
 
+class ProductPublishIn(ProductIn):
+    """Produto publicado por outro sistema.
+
+    O ``sku`` é obrigatório e é o que torna a publicação idempotente: quem
+    republica o mesmo SKU atualiza o produto, não cria outro. Sem ele, uma
+    retentativa depois de uma resposta perdida duplicaria o anúncio.
+    """
+
+    sku: str = Field(..., min_length=1, max_length=60)
+
+
 class ProductList(BaseModel):
     items: list[ProductOut]
     total: int
