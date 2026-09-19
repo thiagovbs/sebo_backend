@@ -4,6 +4,7 @@ Nenhum teste toca a rede: o cliente HTTP é substituído por um dublê.
 """
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import pytest
 from sqlmodel import Session, select
@@ -107,6 +108,64 @@ def test_order_payload_matches_the_contract(
     # O total precisa cobrir a soma dos itens, senão o adapter recusa.
     soma = sum(i["unit_price"] * i["quantity"] for i in corpo["items"])
     assert corpo["total"] >= round(soma, 2) - 0.005
+
+
+def test_listing_changed_orders_needs_the_token_and_a_valid_date(client, service_headers):
+    assert client.get("/integration/orders?updated_since=2020-01-01T00:00:00+00:00").status_code == 401
+    r = client.get("/integration/orders?updated_since=nao-e-data", headers=service_headers)
+    assert r.status_code == 400
+    # Sem o parâmetro, a conciliação varreria o histórico inteiro sem querer.
+    assert client.get("/integration/orders", headers=service_headers).status_code == 422
+
+
+def test_listing_tolerates_an_unescaped_plus_in_the_timezone(client, service_headers):
+    # "+" cru vira espaço na query string; o endpoint recupera em vez de dar 400.
+    r = client.get(
+        "/integration/orders?updated_since=2000-01-01T00:00:00+00:00", headers=service_headers
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_listing_returns_only_what_changed_since(
+    client, customer, product, fake_initiator, service_headers
+):
+    pedido = _comprar(client, customer, product, fake_initiator)
+
+    with Session(engine) as session:
+        alvo = session.get(Order, pedido["id"])
+        marco = omni._as_utc(alvo.updated_at)
+
+    # A partir do próprio carimbo, o pedido entra (a comparação é inclusiva).
+    ids = [o["id"] for o in client.get(
+        f"/integration/orders?updated_since={quote(marco.isoformat())}", headers=service_headers
+    ).json()]
+    assert pedido["id"] in ids
+
+    # Depois dele, não.
+    depois = (marco + timedelta(seconds=1)).isoformat()
+    ids = [o["id"] for o in client.get(
+        f"/integration/orders?updated_since={quote(depois)}", headers=service_headers
+    ).json()]
+    assert pedido["id"] not in ids
+
+
+def test_listing_carries_timezone_and_the_fields_the_consumer_reads(
+    client, customer, product, fake_initiator, service_headers
+):
+    _comprar(client, customer, product, fake_initiator)
+    linhas = client.get(
+        "/integration/orders?updated_since=" + quote("2000-01-01T00:00:00+00:00"),
+        headers=service_headers,
+    ).json()
+    assert linhas
+    for linha in linhas:
+        assert set(linha) == {"id", "status", "updated_at"}
+        # O consumidor recusa data sem deslocamento de fuso.
+        assert datetime.fromisoformat(linha["updated_at"]).tzinfo is not None
+    # Ordenado por updated_at: a conciliação pagina a partir do mais antigo.
+    carimbos = [datetime.fromisoformat(l["updated_at"]) for l in linhas]
+    assert carimbos == sorted(carimbos)
 
 
 def test_unknown_order_is_404(client, service_headers):

@@ -6,9 +6,10 @@ toda rota daqui recusa — falha fechada.
 """
 
 import hmac
+import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session, select
 
@@ -42,6 +43,39 @@ _service = Depends(require_service_token)
 def _iso(value: datetime) -> str:
     """SQLite devolve datetime sem fuso; quem consome exige o deslocamento."""
     return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).isoformat()
+
+
+@router.get("/orders", dependencies=[_service])
+def list_changed_orders(
+    updated_since: str = Query(..., description="ISO 8601 com fuso"),
+    limit: int = Query(200, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Pedidos alterados a partir de uma data, para a conciliação do omnicommerce.
+
+    Devolve só identificação e carimbo: quem quiser o pedido inteiro busca em
+    ``/integration/orders/{id}``. Assim a conciliação varre barato e o contrato
+    do pedido continua num lugar só.
+    """
+    # "+" não escapado em query string chega como espaço, e o fuso se perde.
+    # Restaurar só quando o que sobrou parece deslocamento evita confundir com
+    # o separador de data e hora, que o ISO também aceita como espaço.
+    bruto = re.sub(r" (\d{2}:\d{2})$", r"+\1", updated_since.strip())
+    try:
+        desde = datetime.fromisoformat(bruto)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="updated_since inválido") from None
+    # O banco guarda UTC sem fuso; comparar com valor ciente levantaria TypeError.
+    if desde.tzinfo:
+        desde = desde.astimezone(timezone.utc).replace(tzinfo=None)
+
+    pedidos = session.exec(
+        select(Order)
+        .where(Order.updated_at >= desde)
+        .order_by(Order.updated_at)
+        .limit(limit)
+    ).all()
+    return [{"id": o.id, "status": o.status, "updated_at": _iso(o.updated_at)} for o in pedidos]
 
 
 @router.get("/orders/{order_id}", dependencies=[_service])
