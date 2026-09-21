@@ -1,20 +1,34 @@
 """Área administrativa: métricas de venda, pedidos e clientes.
 
-Endpoints só de leitura, agregando o que já está no banco. O cadastro de
+Quase tudo aqui é leitura, agregando o que já está no banco. O cadastro de
 produtos reusa o CRUD de ``/products`` (com ``include_inactive=true`` para o
 admin ver também os inativos).
+
+A exceção é a **confirmação de pagamento** de PIX QR e boleto. Ela mora aqui, e
+não no cliente, porque quem recebe o dinheiro é a loja e é ela que confere o
+extrato -- o cliente declarando "já paguei" marcaria o pedido como pago sem
+ninguém ter visto entrar. Numa loja real este é o lugar onde o webhook do PSP ou
+o arquivo de retorno do banco chegariam.
 """
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from ..adminauth import check_admin_password, create_admin_token, require_admin
 from ..db import get_session
-from ..integration import get_client, get_integration, is_configured, pix_qr_available
+from ..integration import (
+    boleto_available,
+    boleto_missing,
+    get_client,
+    get_integration,
+    is_configured,
+    pix_qr_available,
+)
+from ..omnicommerce import enqueue_order_event, flush_in_background
 from ..payments import PaymentInitiatorError
 from ..models import (
     Address,
@@ -29,6 +43,11 @@ from ..models import (
 from ..schemas import IntegrationIn, IntegrationOut
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Métodos em que o dinheiro chega DEPOIS do pedido, e que por isso têm
+# confirmação. Cartão e PIX JSR nascem pagos; o Open Finance com redirect se
+# reconcilia contra a iniciadora, sem ninguém declarar nada.
+CONFIRMAVEIS = ("pix_qr", "boleto")
 
 # Todas as rotas de leitura/gestão exigem o admin, exceto POST /admin/login.
 _admin = Depends(require_admin)
@@ -51,6 +70,10 @@ def admin_login(body: AdminLogin) -> dict:
     return create_admin_token()
 
 
+def _digitos(valor: str) -> str:
+    return "".join(c for c in (valor or "") if c.isdigit())
+
+
 def _integration_out(cfg: IntegrationSettings) -> IntegrationOut:
     return IntegrationOut(
         payment_initiator_url=cfg.payment_initiator_url,
@@ -61,8 +84,23 @@ def _integration_out(cfg: IntegrationSettings) -> IntegrationOut:
         sebo_city=cfg.sebo_city,
         sebo_pix_key_type=cfg.sebo_pix_key_type,
         sebo_pix_key_value=cfg.sebo_pix_key_value,
+        boleto_bank_code=cfg.boleto_bank_code,
+        boleto_bank_name=cfg.boleto_bank_name,
+        boleto_agency=cfg.boleto_agency,
+        boleto_account=cfg.boleto_account,
+        boleto_wallet=cfg.boleto_wallet,
+        boleto_days_to_due=cfg.boleto_days_to_due,
+        boleto_instructions=cfg.boleto_instructions,
+        sebo_street=cfg.sebo_street,
+        sebo_number=cfg.sebo_number,
+        sebo_complement=cfg.sebo_complement,
+        sebo_district=cfg.sebo_district,
+        sebo_state=cfg.sebo_state,
+        sebo_zip_code=cfg.sebo_zip_code,
         configured=is_configured(cfg),
         pix_qr_available=pix_qr_available(cfg),
+        boleto_available=boleto_available(cfg),
+        boleto_missing=boleto_missing(cfg),
     )
 
 
@@ -87,6 +125,24 @@ def update_integration(
     cfg.sebo_city = data.sebo_city.strip() or "SAO PAULO"
     cfg.sebo_pix_key_type = data.sebo_pix_key_type.strip() or "CNPJ"
     cfg.sebo_pix_key_value = data.sebo_pix_key_value.strip()
+    # Emissor do boleto. Só dígitos onde o padrão FEBRABAN só aceita dígitos:
+    # deixar passar ponto ou barra aqui viraria erro na emissão, longe de quem
+    # digitou.
+    cfg.boleto_bank_code = _digitos(data.boleto_bank_code)
+    cfg.boleto_bank_name = data.boleto_bank_name.strip()
+    cfg.boleto_agency = _digitos(data.boleto_agency)
+    cfg.boleto_account = _digitos(data.boleto_account)
+    cfg.boleto_wallet = _digitos(data.boleto_wallet)
+    # Prazo entre 0 e 60 dias: fora disso é erro de digitação, e um vencimento
+    # absurdo só apareceria no boleto do cliente.
+    cfg.boleto_days_to_due = max(0, min(60, data.boleto_days_to_due))
+    cfg.boleto_instructions = data.boleto_instructions.strip()[:500]
+    cfg.sebo_street = data.sebo_street.strip()
+    cfg.sebo_number = data.sebo_number.strip()
+    cfg.sebo_complement = data.sebo_complement.strip()
+    cfg.sebo_district = data.sebo_district.strip()
+    cfg.sebo_state = data.sebo_state.strip().upper()[:2]
+    cfg.sebo_zip_code = _digitos(data.sebo_zip_code)
     cfg.updated_at = datetime.now(timezone.utc)
     session.add(cfg)
     session.commit()
@@ -178,6 +234,15 @@ def all_orders(session: Session = Depends(get_session)) -> list[dict]:
                 "total": o.total,
                 "created_at": o.created_at.isoformat(),
                 "payment_status": o.payment_status,
+                "payment_method": o.payment_method,
+                # O que a tela precisa para saber se há pagamento a confirmar e
+                # para mostrar de que cobrança se trata.
+                "awaiting_confirmation": o.status == "AWAITING_PAYMENT"
+                and o.payment_method in CONFIRMAVEIS,
+                "boleto_due_date": o.boleto_due_date,
+                "boleto_our_number": o.boleto_our_number,
+                "card_brand": o.card_brand,
+                "card_last4": o.card_last4,
                 "customer": _customer_brief(customer),
                 "items": [
                     {"name": i.name, "quantity": i.quantity, "unit_price": i.unit_price}
@@ -186,6 +251,52 @@ def all_orders(session: Session = Depends(get_session)) -> list[dict]:
             }
         )
     return result
+
+
+@router.post("/orders/{order_id}/confirm-payment", dependencies=[_admin])
+def confirm_payment(
+    order_id: int,
+    background: BackgroundTasks,
+    session: Session = Depends(get_session),
+) -> dict:
+    """Registra que o pagamento de um pedido caiu, e o marca como pago.
+
+    Vale para PIX QR e boleto, que são os métodos em que o dinheiro chega
+    depois: o cartão e o PIX JSR nascem pagos, e o Open Finance com redirect se
+    reconcilia contra a iniciadora.
+
+    Numa loja real quem dispara isto é o PSP (webhook do PIX) ou o arquivo de
+    retorno do banco (boleto). Nesta demo não há nenhum dos dois, então a loja
+    registra à mão -- mas é a LOJA, que vê o extrato, e não o cliente.
+
+    Idempotente: confirmar um pedido já pago devolve o mesmo resultado, porque
+    dois cliques no mesmo botão não podem virar dois avisos de venda.
+    """
+    order = session.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    if order.payment_method not in CONFIRMAVEIS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pedido pago por {order.payment_method} não tem confirmação manual.",
+        )
+    if order.status == "PAID":
+        return {"id": order.id, "status": order.status, "already_paid": True}
+    if order.status != "AWAITING_PAYMENT":
+        raise HTTPException(status_code=409, detail=f"Pedido está {order.status}")
+
+    order.status = "PAID"
+    order.payment_status = "COMPLETED"
+    session.add(order)
+    session.commit()
+    session.refresh(order)
+
+    # O estoque já foi baixado na emissão; o que falta é avisar o omnicommerce,
+    # que é quem replica a venda aos outros canais.
+    if enqueue_order_event(session, order) is not None:
+        session.commit()
+        background.add_task(flush_in_background)
+    return {"id": order.id, "status": order.status, "already_paid": False}
 
 
 @router.get("/customers", dependencies=[_admin])

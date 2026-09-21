@@ -9,7 +9,13 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session
 
 from ..db import get_session
-from ..integration import get_integration, is_configured, pix_qr_available
+from ..integration import (
+    boleto_available,
+    card_available,
+    get_integration,
+    is_configured,
+    pix_qr_available,
+)
 
 router = APIRouter(prefix="/open-finance", tags=["open-finance"])
 
@@ -22,9 +28,22 @@ def status(session: Session = Depends(get_session)) -> dict:
     - ``redirect``: PIX Open Finance com redirect (mesma exigência do JSR:
       iniciadora + recebedor). Oferecido como opção na tela do PIX QR.
     - ``pix_qr``: PIX QR clássico / copia e cola (precisa só do recebedor).
+    - ``card``: cartão de crédito (autorização simulada na própria loja).
+    - ``boleto``: boleto bancário (precisa dos dados do beneficiário e da conta,
+      preenchidos em Integração, no admin).
     - ``available``: compat — true se qualquer método estiver disponível.
     """
     cfg = get_integration(session)
     jsr = is_configured(cfg)
     pix = pix_qr_available(cfg)
-    return {"jsr": jsr, "redirect": jsr, "pix_qr": pix, "available": jsr or pix}
+    card = card_available(cfg)
+    boleto = boleto_available(cfg)
+    return {
+        "jsr": jsr,
+        "redirect": jsr,
+        "pix_qr": pix,
+        "card": card,
+        "boleto": boleto,
+        # Compat: a tela antiga só perguntava se HAVIA algum método.
+        "available": jsr or pix or card or boleto,
+    }

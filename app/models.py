@@ -34,6 +34,31 @@ class IntegrationSettings(SQLModel, table=True):
     sebo_city: str = "SAO PAULO"  # cidade do recebedor (BR Code do PIX)
     sebo_pix_key_type: str = "CNPJ"
     sebo_pix_key_value: str = ""
+
+    # -- Emissor do boleto --------------------------------------------------
+    # O boleto precisa identificar o beneficiário (quem recebe) com endereço
+    # completo, e a conta em que o dinheiro cai. Isso é dado da LOJA, não do
+    # pedido nem do cliente, e por isso mora aqui, editável no admin: mudar de
+    # banco ou de endereço não pode exigir deploy.
+    #
+    # ``sebo_name`` e ``sebo_cpf_cnpj``, que já existiam para o PIX, são
+    # reaproveitados como razão social e CNPJ do beneficiário -- é a mesma
+    # loja, e duplicar o campo abriria espaço para os dois divergirem.
+    boleto_bank_code: str = ""  # 3 dígitos (ex.: 341 Itaú, 001 BB, 237 Bradesco)
+    boleto_bank_name: str = ""
+    boleto_agency: str = ""
+    boleto_account: str = ""
+    boleto_wallet: str = ""  # carteira, definida pelo banco no contrato
+    boleto_days_to_due: int = 3
+    boleto_instructions: str = ""
+    # Endereço do beneficiário, impresso no boleto.
+    sebo_street: str = ""
+    sebo_number: str = ""
+    sebo_complement: str = ""
+    sebo_district: str = ""
+    sebo_state: str = ""
+    sebo_zip_code: str = ""
+
     updated_at: datetime = Field(default_factory=_now)
 
 
@@ -190,13 +215,31 @@ class Order(SQLModel, table=True):
     total: float = 0.0
     created_at: datetime = Field(default_factory=_now, index=True)
 
-    payment_method: str = "jsr"  # jsr | pix_qr
+    payment_method: str = "jsr"  # jsr | pix_qr | card | boleto
     payment_request_id: str = ""
     payment_consent_id: str = ""
     payment_id: str = ""
     payment_login_url: str = ""
     payment_status: str = ""
     pix_code: str = ""  # BR Code (copia e cola) quando payment_method == pix_qr
+
+    # -- Cartão de crédito --------------------------------------------------
+    # Só dado não sensível, pela mesma razão que o cadastro do cliente: guardar
+    # o número exigiria PCI-DSS, e a demo não tem por que carregar esse risco.
+    # O número usado numa compra não é gravado em lugar nenhum.
+    card_brand: str = ""
+    card_last4: str = ""
+    card_authorization: str = ""  # código de autorização devolvido pelo emissor
+
+    # -- Boleto -------------------------------------------------------------
+    # A linha digitável e o código de barras são FOTOGRAFADOS no pedido, e não
+    # recalculados na leitura: eles dependem do vencimento e dos dados do
+    # beneficiário no instante da emissão, e o admin pode mudar os dois depois.
+    # Recalcular mostraria ao cliente um boleto diferente do que ele recebeu.
+    boleto_digitable_line: str = ""
+    boleto_barcode: str = ""
+    boleto_our_number: str = ""
+    boleto_due_date: str = ""  # ISO (YYYY-MM-DD)
 
     # Avança a cada gravação (``onupdate`` é do próprio SQLAlchemy, então nenhum
     # ponto de escrita precisa lembrar de atualizar). É o carimbo que o

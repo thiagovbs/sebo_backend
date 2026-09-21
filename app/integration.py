@@ -46,3 +46,63 @@ def pix_qr_available(cfg: IntegrationSettings) -> bool:
     Independe da iniciadora: basta os dados do recebedor (nome, cidade e chave).
     """
     return all([cfg.sebo_name, cfg.sebo_city, cfg.sebo_pix_key_value])
+
+
+def card_available(cfg: IntegrationSettings) -> bool:
+    """True quando dá para cobrar no cartão.
+
+    A autorização é simulada dentro da própria loja (ver ``app/card.py``), sem
+    adquirente — então não há credencial de adquirente a exigir. Mas a exigência
+    não é nenhuma: pede-se a IDENTIFICAÇÃO da loja (razão social e CNPJ), que é
+    o mínimo para uma cobrança fazer sentido e é o mesmo dado que o PIX já pede.
+
+    Isso preserva uma propriedade que vale a pena: loja recém-instalada, sem
+    nada configurado, não oferece pagamento nenhum. Sem essa condição, o cartão
+    apareceria sempre e um pedido nasceria PAGO numa loja que ninguém terminou
+    de configurar.
+
+    No dia em que houver adquirente de verdade, é aqui que a credencial dela
+    entra na conta.
+    """
+    return all([cfg.sebo_name, cfg.sebo_cpf_cnpj])
+
+
+def boleto_available(cfg: IntegrationSettings) -> bool:
+    """True quando há dados suficientes para EMITIR um boleto válido.
+
+    Beneficiário (razão social, CNPJ e endereço) e conta (banco, agência, conta
+    e carteira). Faltando qualquer um, o boleto sairia sem quem recebe ou sem
+    onde cair -- e um boleto assim é pior que método indisponível, porque o
+    cliente só descobre no banco.
+    """
+    return all(
+        [
+            cfg.sebo_name,
+            cfg.sebo_cpf_cnpj,
+            cfg.sebo_street,
+            cfg.sebo_city,
+            cfg.sebo_state,
+            cfg.sebo_zip_code,
+            cfg.boleto_bank_code,
+            cfg.boleto_agency,
+            cfg.boleto_account,
+            cfg.boleto_wallet,
+        ]
+    )
+
+
+def boleto_missing(cfg: IntegrationSettings) -> list[str]:
+    """Quais campos do boleto faltam, para o admin não adivinhar."""
+    rotulos = {
+        "sebo_name": "Razão social",
+        "sebo_cpf_cnpj": "CNPJ",
+        "sebo_street": "Logradouro",
+        "sebo_city": "Cidade",
+        "sebo_state": "UF",
+        "sebo_zip_code": "CEP",
+        "boleto_bank_code": "Código do banco",
+        "boleto_agency": "Agência",
+        "boleto_account": "Conta",
+        "boleto_wallet": "Carteira",
+    }
+    return [rotulo for campo, rotulo in rotulos.items() if not getattr(cfg, campo, "")]

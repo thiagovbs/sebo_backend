@@ -169,6 +169,21 @@ class IntegrationIn(BaseModel):
     sebo_city: str = "SAO PAULO"
     sebo_pix_key_type: str = "CNPJ"
     sebo_pix_key_value: str = ""
+    # Emissor do boleto: beneficiário e conta. Editável no admin porque trocar
+    # de banco ou de endereço não pode exigir deploy.
+    boleto_bank_code: str = ""
+    boleto_bank_name: str = ""
+    boleto_agency: str = ""
+    boleto_account: str = ""
+    boleto_wallet: str = ""
+    boleto_days_to_due: int = 3
+    boleto_instructions: str = ""
+    sebo_street: str = ""
+    sebo_number: str = ""
+    sebo_complement: str = ""
+    sebo_district: str = ""
+    sebo_state: str = ""
+    sebo_zip_code: str = ""
 
 
 class IntegrationOut(BaseModel):
@@ -180,14 +195,52 @@ class IntegrationOut(BaseModel):
     sebo_city: str
     sebo_pix_key_type: str
     sebo_pix_key_value: str
+    boleto_bank_code: str
+    boleto_bank_name: str
+    boleto_agency: str
+    boleto_account: str
+    boleto_wallet: str
+    boleto_days_to_due: int
+    boleto_instructions: str
+    sebo_street: str
+    sebo_number: str
+    sebo_complement: str
+    sebo_district: str
+    sebo_state: str
+    sebo_zip_code: str
     configured: bool       # JSR disponível
     pix_qr_available: bool  # PIX QR clássico disponível
+    boleto_available: bool  # dados do emissor completos
+    # O que falta para o boleto, em nome de campo legível: sem isto o admin
+    # olha um método indisponível sem saber o que preencher.
+    boleto_missing: list[str] = []
+
+
+class CardIn(BaseModel):
+    """Cartão digitado no checkout.
+
+    O número e o código de segurança entram, são validados e NÃO são gravados
+    em lugar nenhum -- nem em log. O que pode sobrar (se ``save``) é bandeira,
+    quatro últimos dígitos, nome e validade, que é o que o cadastro do cliente
+    já guardava antes disto existir.
+    """
+
+    number: str
+    holder: str
+    expiry: str  # MM/AA
+    cvv: str
+    label: str = ""
+    save: bool = False
 
 
 class CheckoutIn(BaseModel):
     customer_id: int
     address_id: Optional[int] = None
-    method: str = "jsr"  # jsr | pix_qr
+    method: str = "jsr"  # jsr | pix_qr | card | boleto
+    # Cartão salvo do cliente. Exclusivo com ``card``: ou se usa um cartão
+    # guardado, ou se digita outro.
+    payment_method_id: Optional[int] = None
+    card: Optional[CardIn] = None
 
 
 class OrderItemOut(BaseModel):
@@ -212,3 +265,11 @@ class OrderOut(BaseModel):
     payment_request_id: str = ""
     payment_id: str = ""
     pix_code: str = ""
+    card_brand: str = ""
+    card_last4: str = ""
+    card_authorization: str = ""
+    boleto_digitable_line: str = ""
+    boleto_digitable_line_formatted: str = ""
+    boleto_barcode: str = ""
+    boleto_our_number: str = ""
+    boleto_due_date: str = ""

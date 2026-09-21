@@ -109,14 +109,50 @@ def test_pix_qr_does_not_require_a_device(client, customer, product, fake_initia
     assert r.status_code == 201
 
 
-def test_confirm_pix_marks_the_order_paid(client, customer, product, fake_initiator):
+def test_o_cliente_nao_confirma_o_proprio_pagamento(
+    client, customer, product, fake_initiator
+):
+    """Quem confere o extrato é a loja, e a confirmação mora no admin.
+
+    O cliente declarando "já paguei" marcava o pedido como pago sem ninguém ter
+    visto o dinheiro entrar. A rota do cliente deixou de existir.
+    """
     _add(client, customer["id"], product, 1)
     order = client.post(
         "/orders/checkout", json={"customer_id": customer["id"], "method": "pix_qr"}
     ).json()
-    paid = client.post(f"/orders/{order['id']}/confirm-pix").json()
-    assert paid["status"] == "PAID"
-    assert paid["payment_status"] == "COMPLETED"
+    assert client.post(f"/orders/{order['id']}/confirm-pix").status_code == 404
+    assert client.get(f"/orders/{order['id']}").json()["status"] == "AWAITING_PAYMENT"
+
+
+def test_a_loja_confirma_o_pix_e_o_pedido_fica_pago(
+    client, customer, product, fake_initiator, admin_headers
+):
+    _add(client, customer["id"], product, 1)
+    order = client.post(
+        "/orders/checkout", json={"customer_id": customer["id"], "method": "pix_qr"}
+    ).json()
+    r = client.post(
+        f"/admin/orders/{order['id']}/confirm-payment", headers=admin_headers
+    )
+    assert r.status_code == 200
+    assert r.json() == {"id": order["id"], "status": "PAID", "already_paid": False}
+
+    pago = client.get(f"/orders/{order['id']}").json()
+    assert pago["status"] == "PAID"
+    assert pago["payment_status"] == "COMPLETED"
+
+
+def test_confirmacao_de_pagamento_exige_admin(client, customer, product, fake_initiator):
+    _add(client, customer["id"], product, 1)
+    order = client.post(
+        "/orders/checkout", json={"customer_id": customer["id"], "method": "pix_qr"}
+    ).json()
+    # O token do cliente não serve: sem esta barreira, o cliente confirmaria o
+    # próprio pagamento por outro caminho.
+    r = client.post(f"/admin/orders/{order['id']}/confirm-payment")
+    assert r.status_code in (401, 403)
+    assert client.get(f"/orders/{order['id']}").json()["status"] == "AWAITING_PAYMENT"
 
 
 def test_pix_qr_blocked_when_recebedor_not_configured(client, customer, product, admin_headers):

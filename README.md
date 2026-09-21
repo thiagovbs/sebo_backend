@@ -15,8 +15,8 @@ O frontend fica em outro repositório ([`sebo_frontend`](https://github.com/thia
 └────────────┘         │  FastAPI + SQLite │          │ (iniciadora) │        └──────────────┘
                        └───────────────────┘          └──────────────┘
 
-Três jornadas de PIX no checkout
-────────────────────────────────
+Quatro métodos no checkout: PIX (três jornadas), cartão e boleto
+────────────────────────────────────────────────────────────────
 1) QR clássico       Backend gera o BR Code da chave do Sebo → cliente paga no
    (copia e cola)    app do banco. Não passa pela iniciadora.
 
@@ -47,9 +47,33 @@ Três jornadas de PIX no checkout
     pedido é reconciliado (`GET /payments/{consent_id}`) e marcado como pago.
   - **PIX Open Finance JSR (sem redirect)** — o cliente autoriza o Sebo uma vez
     (autenticando no banco) e paga **sem redirect**; o pedido nasce já pago.
+- **Cartão de crédito** (`app/card.py`) — cartão salvo do cadastro ou outro
+  digitado na hora, que pode ser salvo depois de aprovado. Sem adquirente: a
+  autorização é **simulada**, com Luhn, bandeira por prefixo, validade, código
+  de segurança e cartões de teste documentados no módulo. O **número do cartão
+  não é gravado nem registrado em log** — guardá-lo exigiria PCI-DSS, e o
+  cadastro só tem bandeira, quatro últimos dígitos, nome e validade. Autoriza
+  ANTES de persistir: recusa não cria pedido nem baixa estoque.
+- **Boleto bancário** (`app/boleto.py`) — aritmética FEBRABAN de verdade: 44
+  posições do código de barras, 47 da linha digitável, DV por módulo 10 e 11 e
+  fator de vencimento na base vigente (22/02/2025 = 1000; a contagem original
+  reiniciou ali). O layout do campo livre é nosso e está declarado, porque cada
+  banco define o seu. O boleto **não é registrado em banco** nesta demo: ninguém
+  consegue pagá-lo de fato. O pedido nasce `AWAITING_PAYMENT` com o estoque já
+  reservado, e é liberado quando a **loja** registra o recebimento.
+- **Confirmação de pagamento no admin** (`POST /admin/orders/{id}/confirm-payment`)
+  — PIX QR e boleto são os métodos em que o dinheiro chega depois, e quem
+  registra que chegou é a **loja**, que vê o extrato. O cliente não declara
+  pagamento: declarar marcaria o pedido como pago sem ninguém ter visto entrar.
+  Numa loja real este é o lugar onde o webhook do PSP (PIX) ou o arquivo de
+  retorno do banco (boleto) chegariam. É idempotente, porque dois cliques no
+  botão não podem virar dois avisos de venda ao omnicommerce.
 - **Painel de admin** (`/admin`) — protegido por senha: dashboard de vendas,
-  cadastro/edição de produtos, pedidos, clientes e a seção **Integração** (dados
-  da iniciadora e do recebedor do PIX, editáveis em tempo de execução).
+  cadastro/edição de produtos, pedidos (com o botão de registrar pagamento e um
+  aviso de quantos aguardam), clientes e a seção **Integração** (dados da
+  iniciadora, recebedor do PIX e **emissor do boleto** — beneficiário com
+  endereço, banco, agência, conta, carteira, prazo e instruções —, todos
+  editáveis em tempo de execução).
 
 ## Como rodar
 

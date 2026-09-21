@@ -1,5 +1,6 @@
 """Montagem dos schemas de saída compostos (reaproveitados entre routers)."""
 
+from .boleto import BoletoError, formatar_linha
 from .models import Order, OrderItem
 from .schemas import OrderItemOut, OrderOut
 
@@ -28,4 +29,25 @@ def order_to_out(order: Order, items: list[OrderItem]) -> OrderOut:
         payment_request_id=order.payment_request_id,
         payment_id=order.payment_id,
         pix_code=order.pix_code,
+        card_brand=order.card_brand,
+        card_last4=order.card_last4,
+        card_authorization=order.card_authorization,
+        boleto_digitable_line=order.boleto_digitable_line,
+        # A versão pontuada é derivada na saída, e não guardada: são os mesmos
+        # 47 dígitos, e duas cópias do mesmo dado divergem na primeira correção.
+        boleto_digitable_line_formatted=_formatada(order.boleto_digitable_line),
+        boleto_barcode=order.boleto_barcode,
+        boleto_our_number=order.boleto_our_number,
+        boleto_due_date=order.boleto_due_date,
     )
+
+
+def _formatada(linha: str) -> str:
+    if not linha:
+        return ""
+    try:
+        return formatar_linha(linha)
+    except BoletoError:
+        # Linha gravada por versão anterior ou corrompida: mostra o que há, sem
+        # derrubar a leitura do pedido por causa da pontuação.
+        return linha
