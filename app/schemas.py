@@ -211,9 +211,11 @@ class IntegrationOut(BaseModel):
     configured: bool       # JSR disponível
     pix_qr_available: bool  # PIX QR clássico disponível
     boleto_available: bool  # dados do emissor completos
-    # O que falta para o boleto, em nome de campo legível: sem isto o admin
-    # olha um método indisponível sem saber o que preencher.
-    boleto_missing: list[str] = []
+    boleto_missing: list[str] = Field(
+        default=[],
+        description="Campos do emissor que faltam, em nome legível. Sem isto o"
+        " admin olha um método indisponível sem saber o que preencher.",
+    )
 
 
 class CardIn(BaseModel):
@@ -227,7 +229,7 @@ class CardIn(BaseModel):
 
     number: str
     holder: str
-    expiry: str  # MM/AA
+    expiry: str = Field(..., description="Validade no formato MM/AA.")
     cvv: str
     label: str = ""
     save: bool = False
@@ -237,9 +239,11 @@ class CheckoutIn(BaseModel):
     customer_id: int
     address_id: Optional[int] = None
     method: str = "jsr"  # jsr | pix_qr | card | boleto
-    # Cartão salvo do cliente. Exclusivo com ``card``: ou se usa um cartão
-    # guardado, ou se digita outro.
-    payment_method_id: Optional[int] = None
+    payment_method_id: Optional[int] = Field(
+        default=None,
+        description="Cartão salvo do cliente. Exclusivo com card: ou se usa um"
+        " cartão guardado, ou se digita outro.",
+    )
     card: Optional[CardIn] = None
 
 
@@ -268,8 +272,12 @@ class OrderOut(BaseModel):
     card_brand: str = ""
     card_last4: str = ""
     card_authorization: str = ""
-    boleto_digitable_line: str = ""
-    boleto_digitable_line_formatted: str = ""
-    boleto_barcode: str = ""
+    boleto_digitable_line: str = Field(
+        default="", description="47 dígitos, sem pontuação.")
+    boleto_digitable_line_formatted: str = Field(
+        default="", description="A mesma linha com a pontuação em que ela é impressa.")
+    boleto_barcode: str = Field(
+        default="", description="44 dígitos do código de barras.")
     boleto_our_number: str = ""
-    boleto_due_date: str = ""
+    boleto_due_date: str = Field(
+        default="", description="Vencimento em ISO (YYYY-MM-DD).")

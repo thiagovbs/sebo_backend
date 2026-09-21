@@ -20,7 +20,15 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
-_bearer = HTTPBearer(auto_error=False, description="Token obtido em POST /admin/login")
+# `scheme_name` dá a este realm um esquema próprio no contrato. Sem ele, os
+# três HTTPBearer da aplicação (admin, cliente e serviço) colapsam num único
+# esquema chamado "HTTPBearer", e a descrição que sobra é a do último router
+# incluído em main.py -- quem lê o contrato não distingue os realms.
+_bearer = HTTPBearer(
+    scheme_name="AdminBearer",
+    auto_error=False,
+    description="Token obtido em POST /admin/login",
+)
 
 
 # ---------------------------------------------------------------------------

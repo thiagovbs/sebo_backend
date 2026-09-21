@@ -21,7 +21,11 @@ from ..schemas import ProductOut, ProductPublishIn
 
 router = APIRouter(prefix="/integration", tags=["integração"])
 
-_bearer = HTTPBearer(auto_error=False, description="INTEGRATION_TOKEN")
+_bearer = HTTPBearer(
+    scheme_name="ServiceBearer",
+    auto_error=False,
+    description="Token de serviço fixo (INTEGRATION_TOKEN). É máquina, não pessoa.",
+)
 
 
 def require_service_token(

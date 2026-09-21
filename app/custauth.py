@@ -24,7 +24,11 @@ from .models import Customer
 
 logger = logging.getLogger(__name__)
 
-_bearer = HTTPBearer(auto_error=False, description="Token do cliente (POST /customers/login)")
+_bearer = HTTPBearer(
+    scheme_name="CustomerBearer",
+    auto_error=False,
+    description="Token do cliente (POST /customers/login)",
+)
 
 _ALGORITHM = "pbkdf2_sha256"
 _ITERATIONS = 200_000

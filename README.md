@@ -131,6 +131,30 @@ Gere segredos próprios: `python -c "import secrets; print(secrets.token_urlsafe
 uv run pytest
 ```
 
+## Contrato OpenAPI (portal do gateway)
+
+O `openapi.yaml` é **gerado** da aplicação e fica fora do versionamento, porque
+quem o consome é o portal do gateway da Sensedia, onde ele é publicado à mão.
+
+```bash
+uv run python scripts/gen_openapi.py          # regera o openapi.yaml
+uv run python scripts/gen_openapi.py --check  # falha se o arquivo defasou
+```
+
+Duas coisas valem a lembrança:
+
+- **A documentação da API mora no código**, não no YAML: título, versão,
+  descrição e `servers` estão em `app/main.py`; o texto de cada rota vem do
+  docstring dela e o de cada campo, de `Field(description=...)`. O que for
+  escrito direto no YAML se perde na primeira regeneração — foi assim que o
+  arquivo ficou oito caminhos atrás da aplicação.
+- **Publicar é uma substituição**: o portal passa a valer o que o arquivo diz.
+  Rode `--check` antes de publicar e confira a lista de caminhos, para não
+  apagar do portal uma rota que só estava lá.
+
+O gateway consome OpenAPI 3.0.x e o FastAPI emite 3.1; a conversão está toda em
+`para_30`, no próprio script, com cada regra justificada.
+
 ## Papéis na demo
 
 - **Sebo On-Line** — a loja (este projeto). É o *lojista/recebedor*.

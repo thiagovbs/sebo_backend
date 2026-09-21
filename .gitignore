@@ -8,3 +8,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 data/
+
+# Gerado por scripts/gen_openapi.py e publicado à mão no portal do gateway.
+# Ficar de fora é intencional; estava de fora só por nunca ter sido adicionado,
+# e um `git add -A` o comitaria.
+openapi.yaml
