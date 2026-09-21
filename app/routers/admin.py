@@ -20,6 +20,7 @@ from sqlmodel import Session, select
 
 from ..adminauth import check_admin_password, create_admin_token, require_admin
 from ..db import get_session
+from ..boleto import BoletoError, conferir_emissor
 from ..integration import (
     boleto_available,
     boleto_missing,
@@ -133,6 +134,22 @@ def update_integration(
     cfg.boleto_agency = _digitos(data.boleto_agency)
     cfg.boleto_account = _digitos(data.boleto_account)
     cfg.boleto_wallet = _digitos(data.boleto_wallet)
+    # Recusa AQUI o que não caberia no boleto. Antes, a conta era conferida só
+    # na emissão: a loja salvava uma agência de cinco dígitos, o painel dizia
+    # "boleto ativo" e o erro só aparecia no carrinho do cliente -- longe de
+    # quem digitou e de quem podia corrigir. Nada foi gravado ainda.
+    try:
+        conferir_emissor(
+            banco=cfg.boleto_bank_code,
+            agencia=cfg.boleto_agency,
+            conta=cfg.boleto_account,
+            carteira=cfg.boleto_wallet,
+        )
+    except BoletoError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "BOLETO_INVALID_SETTINGS", "message": str(exc)},
+        ) from exc
     # Prazo entre 0 e 60 dias: fora disso é erro de digitação, e um vencimento
     # absurdo só apareceria no boleto do cliente.
     cfg.boleto_days_to_due = max(0, min(60, data.boleto_days_to_due))

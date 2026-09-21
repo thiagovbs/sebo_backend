@@ -104,15 +104,20 @@ async def lifespan(_app: FastAPI):
 
 # Título, versão e `servers` são os do contrato publicado: o portal do gateway
 # tinha esses valores e o arquivo local nunca teve, então cada regeneração os
-# perdia. O primeiro servidor é o que vale no portal; o segundo existe para o
-# "Try it out" do /docs continuar batendo na máquina de quem desenvolve.
+# perdia.
+#
+# `servers` tem UMA entrada, e é a do gateway. Acrescentar um servidor local
+# (`http://localhost:8200`, para o "Try it out" do /docs) fez o portal recusar
+# a gravação com erro genérico e corromper o base path da API -- foi preciso
+# apagar e recriar a API na plataforma para sair disso. O portal deriva o base
+# path de `servers`, então aqui só entra o endereço pelo qual a API é
+# publicada.
 app = FastAPI(
     title="[Demo] Sebo Online",
     version="1.0.0",
     description=DESCRICAO,
     servers=[
         {"url": "https://api-assets.sensedia.com/sebo/api", "description": "Produção"},
-        {"url": "http://localhost:8200", "description": "Desenvolvimento"},
     ],
     lifespan=lifespan,
 )

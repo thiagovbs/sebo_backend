@@ -239,19 +239,70 @@ def test_prazo_de_vencimento_vem_da_configuracao(
     assert pedido["boleto_due_date"] == esperado
 
 
-def test_agencia_invalida_nao_deixa_pedido_pela_metade(
+def test_o_admin_recusa_agencia_com_digito_demais_ao_salvar(client, admin_headers):
+    """A recusa acontece onde o dado é digitado, não no carrinho do cliente."""
+    _configurar(client, admin_headers)  # parte de uma configuração boa
+    r = client.put(
+        "/admin/integration",
+        headers=admin_headers,
+        json=_integracao_completa(boleto_agency="123456"),
+    )
+    assert r.status_code == 409
+    detalhe = r.json()["detail"]
+    assert detalhe["error"] == "BOLETO_INVALID_SETTINGS"
+    # A mensagem nomeia o campo: é ela que o painel mostra.
+    assert "Agência" in detalhe["message"]
+
+    # E nada foi gravado: a configuração boa continua valendo.
+    atual = client.get("/admin/integration", headers=admin_headers).json()
+    assert atual["boleto_agency"] == "1234"
+    assert atual["boleto_available"] is True
+
+
+def test_o_admin_recusa_banco_com_digito_demais_ao_salvar(client, admin_headers):
+    """O código do banco só estourava depois de o pedido existir."""
+    r = client.put(
+        "/admin/integration",
+        headers=admin_headers,
+        json=_integracao_completa(boleto_bank_code="0341"),
+    )
+    assert r.status_code == 409
+    assert "Banco" in r.json()["detail"]["message"]
+
+
+def test_configuracao_fora_de_forma_nao_anuncia_boleto_disponivel(
     client, admin_headers, customer, product
 ):
-    # Agência com dígito demais: a configuração passa pelo admin (que só limpa
-    # o que não é dígito), e a recusa acontece antes de o pedido existir.
-    _configurar(client, admin_headers, boleto_agency="123456")
+    """Disponibilidade e emissão passam a usar a mesma conta.
+
+    Simula o que já está gravado num ambiente configurado antes desta
+    validação existir: o campo tem conteúdo, mas não cabe no boleto. Antes, o
+    painel dizia "boleto ativo", o cliente via a opção e o checkout recusava.
+    """
+    from sqlmodel import Session
+
+    from app.db import engine
+    from app.integration import boleto_available, boleto_missing, get_integration
+
+    _configurar(client, admin_headers)
+    with Session(engine) as session:
+        cfg = get_integration(session)
+        cfg.boleto_agency = "123456"  # burla o admin, como um registro antigo
+        session.add(cfg)
+        session.commit()
+        assert boleto_available(cfg) is False
+        assert any("Agência" in p for p in boleto_missing(cfg))
+
+    # O cliente não recebe a opção...
+    assert client.get("/open-finance/status").json()["boleto"] is False
+    # ...e, se tentar mesmo assim, nenhum pedido fica pela metade.
     _add(client, customer["id"], product, 1)
     antes = len(client.get("/orders").json())
     r = client.post(
         "/orders/checkout", json={"customer_id": customer["id"], "method": "boleto"}
     )
     assert r.status_code == 409
-    assert r.json()["detail"]["error"] == "BOLETO_INVALID_SETTINGS"
+    assert r.json()["detail"]["error"] in ("BOLETO_UNAVAILABLE", "BOLETO_INVALID_SETTINGS")
     assert len(client.get("/orders").json()) == antes
 
 

@@ -7,6 +7,7 @@ Finance fica indisponível para o cliente.
 
 from sqlmodel import Session
 
+from .boleto import BoletoError, conferir_emissor
 from .models import IntegrationSettings
 from .payments import get_client  # noqa: F401  (reexport para os routers)
 
@@ -67,14 +68,37 @@ def card_available(cfg: IntegrationSettings) -> bool:
     return all([cfg.sebo_name, cfg.sebo_cpf_cnpj])
 
 
+def boleto_form_errors(cfg: IntegrationSettings) -> list[str]:
+    """Problemas de FORMA no que está preenchido, na conta da própria emissão.
+
+    ``boleto_missing`` diz o que está vazio; isto diz o que está preenchido e
+    não cabe no layout -- uma agência com dígito verificador, por exemplo. Usa
+    a mesma função que monta o boleto, de propósito: enquanto a
+    disponibilidade só olhava se o campo tinha algo, o painel anunciava um
+    boleto que o checkout recusava.
+    """
+    try:
+        conferir_emissor(
+            banco=cfg.boleto_bank_code,
+            agencia=cfg.boleto_agency,
+            conta=cfg.boleto_account,
+            carteira=cfg.boleto_wallet,
+        )
+    except BoletoError as exc:
+        return [str(exc)]
+    return []
+
+
 def boleto_available(cfg: IntegrationSettings) -> bool:
     """True quando há dados suficientes para EMITIR um boleto válido.
 
     Beneficiário (razão social, CNPJ e endereço) e conta (banco, agência, conta
-    e carteira). Faltando qualquer um, o boleto sairia sem quem recebe ou sem
-    onde cair -- e um boleto assim é pior que método indisponível, porque o
-    cliente só descobre no banco.
+    e carteira), todos preenchidos e em forma. Faltando qualquer um, o boleto
+    sairia sem quem recebe ou sem onde cair -- e um boleto assim é pior que
+    método indisponível, porque o cliente só descobre no banco.
     """
+    if boleto_form_errors(cfg):
+        return False
     return all(
         [
             cfg.sebo_name,
@@ -92,7 +116,12 @@ def boleto_available(cfg: IntegrationSettings) -> bool:
 
 
 def boleto_missing(cfg: IntegrationSettings) -> list[str]:
-    """Quais campos do boleto faltam, para o admin não adivinhar."""
+    """O que impede o boleto, em nome legível, para o admin não adivinhar.
+
+    Campo vazio e campo fora de forma entram na mesma lista: para quem está na
+    tela, os dois são a mesma pergunta -- "o que falta para o boleto
+    funcionar?".
+    """
     rotulos = {
         "sebo_name": "Razão social",
         "sebo_cpf_cnpj": "CNPJ",
@@ -105,4 +134,5 @@ def boleto_missing(cfg: IntegrationSettings) -> list[str]:
         "boleto_account": "Conta",
         "boleto_wallet": "Carteira",
     }
-    return [rotulo for campo, rotulo in rotulos.items() if not getattr(cfg, campo, "")]
+    vazios = [rotulo for campo, rotulo in rotulos.items() if not getattr(cfg, campo, "")]
+    return vazios + boleto_form_errors(cfg)

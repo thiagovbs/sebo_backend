@@ -105,6 +105,21 @@ def campo_livre(
     )
 
 
+def conferir_emissor(*, banco: str, agencia: str, conta: str, carteira: str) -> None:
+    """Recusa dado do emissor que não caberia no boleto, sem montar nada.
+
+    É a mesma aritmética da emissão -- o campo livre e o código do banco --,
+    isolada para poder ser chamada onde o dado é DIGITADO. Sem isto, a loja
+    salvava uma agência de cinco dígitos, o painel dizia "boleto ativo", e o
+    erro aparecia no carrinho do cliente, que não tem como corrigi-lo.
+
+    Campo vazio não é erro aqui: uma configuração pela metade pode ser salva, e
+    quem decide se o boleto está completo é ``boleto_available``.
+    """
+    _digitos(banco, 3, "Banco")
+    campo_livre(agencia=agencia, conta=conta, carteira=carteira, nosso_numero="0")
+
+
 def codigo_de_barras(
     *,
     banco: str,

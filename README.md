@@ -151,6 +151,10 @@ Duas coisas valem a lembrança:
 - **Publicar é uma substituição**: o portal passa a valer o que o arquivo diz.
   Rode `--check` antes de publicar e confira a lista de caminhos, para não
   apagar do portal uma rota que só estava lá.
+- **`servers` tem uma entrada só, a do gateway.** O portal deriva o base path
+  dela. Acrescentar um servidor local para o `/docs` fez a gravação falhar com
+  erro genérico (`There was an error saving this API/Swagger`) e corromper o
+  base path — foi preciso apagar e recriar a API na plataforma.
 
 O gateway consome OpenAPI 3.0.x e o FastAPI emite 3.1; a conversão está toda em
 `para_30`, no próprio script, com cada regra justificada.

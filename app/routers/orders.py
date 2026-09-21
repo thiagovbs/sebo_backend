@@ -27,7 +27,7 @@ iniciar PIX na conta dele, uma vez (ver ``routers/devices.py``). No checkout:
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session, select
 
-from ..boleto import BoletoError, campo_livre
+from ..boleto import BoletoError, conferir_emissor
 from ..boleto import emitir as emitir_boleto
 from ..card import CardError, autorizar, autorizar_salvo
 from ..config import settings
@@ -241,14 +241,16 @@ def checkout(
                     " beneficiário. Faltam: " + ", ".join(boleto_missing(cfg)) + ".",
                 },
             )
-        # Confere a FORMA dos dados da conta antes de criar o pedido: agência
-        # com dígito demais só apareceria na montagem, e aí já haveria pedido.
+        # Confere a FORMA dos dados do emissor antes de criar o pedido. O admin
+        # já recusa isto ao salvar; aqui a guarda continua para configuração
+        # gravada antes dessa validação existir -- e agora inclui o código do
+        # banco, que antes só estourava depois de o pedido existir.
         try:
-            campo_livre(
+            conferir_emissor(
+                banco=cfg.boleto_bank_code,
                 agencia=cfg.boleto_agency,
                 conta=cfg.boleto_account,
                 carteira=cfg.boleto_wallet,
-                nosso_numero="0",
             )
         except BoletoError as exc:
             raise HTTPException(

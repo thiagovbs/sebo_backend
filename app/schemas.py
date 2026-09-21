@@ -213,8 +213,10 @@ class IntegrationOut(BaseModel):
     boleto_available: bool  # dados do emissor completos
     boleto_missing: list[str] = Field(
         default=[],
-        description="Campos do emissor que faltam, em nome legível. Sem isto o"
-        " admin olha um método indisponível sem saber o que preencher.",
+        description="O que impede o boleto, em nome legível: campos do emissor"
+        " em branco e valores que não cabem no layout (ex.: agência com dígito"
+        " demais). Sem isto o admin olha um método indisponível sem saber o que"
+        " corrigir.",
     )
 
 
