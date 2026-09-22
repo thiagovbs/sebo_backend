@@ -14,10 +14,18 @@ Por que 3.0.3 e não o 3.1 que o FastAPI emite: o gateway da Sensedia consome
 3.0.x. A conversão é pequena e está toda em ``para_30``, com cada regra
 justificada — o que não aparecer na saída da aplicação hoje continua tratado,
 porque um campo novo amanhã não pode virar contrato inválido em silêncio.
+
+Por que o arquivo carrega extensões ``x-`` da Sensedia: o import do portal é
+este mesmo documento, e é nele que moram o **destino** (o endereço do backend
+que o gateway chama) e a **cadeia de interceptors**. Um contrato sem elas não
+é "só documentação": republicar apaga o destino e os interceptors da API, e o
+gateway passa a não ter para onde encaminhar. O conteúdo de ``SENSEDIA`` abaixo
+é o export da API como ela está hoje no gateway -- mudou lá, muda aqui.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -30,6 +38,38 @@ from app.main import app  # noqa: E402
 
 VERSAO_ALVO = "3.0.3"
 DESTINO = Path(__file__).resolve().parent.parent / "openapi.yaml"
+
+# Endereço do backend que o gateway chama. Vem do export da API no portal;
+# a variável de ambiente existe para apontar outro ambiente sem editar o
+# script -- trocar de host não pode exigir commit.
+DESTINO_BACKEND = os.getenv("SENSEDIA_DESTINATION", "http://34.200.109.21:8200/")
+
+CICLO_DE_VIDA = "Stage One"
+
+# Cadeia de interceptors da API, como o portal a exporta. Dois LOG, um em cada
+# ponta: `FIRST` roda na entrada e `SECOND` na saída. `REFERENCE` é o
+# interceptor que aponta para o cadastrado no ambiente, e não uma cópia.
+#
+# O conteúdo é JSON em texto, e é assim que o portal o lê -- não transformar em
+# objeto YAML, porque o import espera a string.
+INTERCEPTORS = {
+    1: {
+        "x-interceptor-position": 0,
+        "x-interceptor-type": "LOG",
+        "x-interceptor-content":
+            '{"acceptedTerms":true,"ignoreBodyValidationMultiPartFormData":false}',
+        "x-interceptor-execution-point": "SECOND",
+        "x-interceptor-status": "REFERENCE",
+    },
+    2: {
+        "x-interceptor-position": 0,
+        "x-interceptor-type": "LOG",
+        "x-interceptor-content":
+            '{"acceptedTerms":true,"ignoreBodyValidationMultiPartFormData":false}',
+        "x-interceptor-execution-point": "FIRST",
+        "x-interceptor-status": "REFERENCE",
+    },
+}
 
 
 def para_30(no):
@@ -93,10 +133,53 @@ def para_30(no):
     return no
 
 
+METODOS = ("get", "put", "post", "delete", "patch", "head", "options", "trace")
+
+
+def aplicar_sensedia(spec: dict) -> dict:
+    """Acrescenta ao contrato o que o portal precisa para reimportar a API.
+
+    São três níveis, e o portal usa os três:
+
+    - **operação**: ``x-resource-name`` é o caminho a que ela pertence. É por
+      ele que o portal agrupa métodos sob o mesmo recurso; sem isso, cada
+      operação viraria um recurso solto.
+    - **recurso**: ``x-resources`` repete os caminhos com a descrição e a
+      cadeia de interceptors DAQUELE recurso. Vazio aqui porque a API não tem
+      interceptor por recurso -- só os globais.
+    - **API**: destino, interceptors e ciclo de vida.
+
+    O que este projeto NÃO tem hoje (interceptor por recurso ou por operação)
+    sai como mapa vazio, e não ausente: é assim que o export do portal escreve,
+    e o que a importação espera encontrar.
+    """
+    for caminho, operacoes in spec.get("paths", {}).items():
+        for metodo, operacao in operacoes.items():
+            if metodo not in METODOS or not isinstance(operacao, dict):
+                continue
+            operacao["x-resource-name"] = caminho
+            operacao["x-api-broken"] = False
+            operacao["x-interceptors"] = {}
+
+    spec["x-destination"] = DESTINO_BACKEND
+    spec["x-interceptors"] = INTERCEPTORS
+    spec["x-life-cycle"] = CICLO_DE_VIDA
+    spec["x-resources"] = {
+        caminho: {
+            "x-resource-description": "",
+            "x-interceptors": {},
+            "x-api-broken": False,
+        }
+        for caminho in spec.get("paths", {})
+    }
+    spec["x-api-broken"] = False
+    return spec
+
+
 def gerar() -> dict:
     spec = para_30(app.openapi())
     spec["openapi"] = VERSAO_ALVO
-    return spec
+    return aplicar_sensedia(spec)
 
 
 class _Dumper(yaml.SafeDumper):
@@ -142,6 +225,7 @@ def main() -> int:
 
     DESTINO.write_text(texto, encoding="utf-8", newline="\n")
     print(f"openapi.yaml gerado: {caminhos} caminhos, {schemas} schemas, OpenAPI {VERSAO_ALVO}.")
+    print(f"Destino: {DESTINO_BACKEND} | interceptors: {len(INTERCEPTORS)} | {CICLO_DE_VIDA}.")
     print("Lembre de publicar no portal do gateway -- o arquivo é a fonte, o portal é a cópia.")
     return 0
 
