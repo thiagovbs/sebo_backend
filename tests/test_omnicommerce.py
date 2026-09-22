@@ -500,3 +500,36 @@ def test_order_items_carry_the_sku_so_the_publisher_can_debit_stock(
         f"/integration/orders/{novo['id']}", headers=service_headers
     ).json()["items"]
     assert [i["sku"] for i in itens] == ["LIVRO-001"]
+
+
+# --- Endereço público do produto (link de destino dos canais) --------------
+
+
+def test_produto_publicado_tem_endereco_publico_pelo_sku(client, service_headers):
+    """O canal precisa de um link por item, e conhece o produto pelo SKU.
+
+    O catálogo do Meta recusa item sem página de destino, e o id deste banco
+    não diz nada a quem publicou -- quem publica conhece o SKU.
+    """
+    publicado = _publicar(client, service_headers, sku="LINK-001", name="Livro com link").json()
+    r = client.get("/products/sku/LINK-001")
+    assert r.status_code == 200
+    assert r.json()["id"] == publicado["id"]
+    assert r.json()["name"] == "Livro com link"
+
+    # A rota do id continua funcionando: "sku" não é engolido por ela.
+    assert client.get(f"/products/{publicado['id']}").status_code == 200
+    assert client.get("/products/sku/NAO-EXISTE").status_code == 404
+
+
+def test_produto_desativado_nao_tem_pagina(client, service_headers, admin_headers):
+    """Desativado sai do catálogo do canal; anunciar o que não está à venda
+    seria pior que responder 404."""
+    publicado = _publicar(client, service_headers, sku="LINK-002", name="Sai de linha").json()
+    assert client.get("/products/sku/LINK-002").status_code == 200
+    client.put(
+        f"/products/{publicado['id']}",
+        headers=admin_headers,
+        json={"name": "Sai de linha", "price": 10.0, "active": False},
+    )
+    assert client.get("/products/sku/LINK-002").status_code == 404

@@ -112,6 +112,33 @@ async def upload_image(file: UploadFile = File(...)) -> dict:
     }
 
 
+@router.get("/sku/{sku}", response_model=ProductOut)
+def get_product_by_sku(sku: str, session: Session = Depends(get_session)) -> ProductOut:
+    """Produto pelo SKU de quem publicou -- é o endereço público do anúncio.
+
+    Existe porque o catálogo do Meta (e qualquer outro canal que anuncie este
+    produto) exige um **link de destino** por item, e quem publica conhece o
+    produto pelo SKU, não pelo id que este banco gerou.
+
+    Declarada ANTES de ``/{product_id}``: aquela rota tipa o parâmetro como
+    inteiro, então "sku" chegaria nela e viraria 422 em vez de cair aqui.
+
+    Só produto ativo: o item sai do catálogo do canal quando é desativado, e
+    uma página anunciando o que não está à venda é pior que um 404.
+    """
+    limpo = sku.strip()
+    if not limpo:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+    product = session.exec(
+        select(Product)
+        .where(Product.external_sku == limpo)
+        .where(Product.active == True)  # noqa: E712 -- SQLModel exige a comparação
+    ).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+    return ProductOut.model_validate(product, from_attributes=True)
+
+
 @router.get("/{product_id}", response_model=ProductOut)
 def get_product(
     product_id: int, session: Session = Depends(get_session)
