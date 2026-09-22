@@ -392,3 +392,101 @@ def test_confirmacao_manual_nao_vale_para_cartao(
 def test_confirmar_pedido_inexistente_e_404(client, admin_headers):
     r = client.post("/admin/orders/999999/confirm-payment", headers=admin_headers)
     assert r.status_code == 404
+
+
+# --- Ficha do boleto (GET /orders/{id}/boleto) -----------------------------
+
+
+def _pedido_com_boleto(client, admin_headers, customer, product):
+    _configurar(client, admin_headers)
+    _add(client, customer["id"], product, 1)
+    r = client.post(
+        "/orders/checkout", json={"customer_id": customer["id"], "method": "boleto"}
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_a_ficha_traz_beneficiario_pagador_e_o_mesmo_numero(
+    client, admin_headers, customer, product
+):
+    """O que a ficha acrescenta ao pedido é justamente o que não cabia nele:
+    quem recebe (que mora na config de admin) e quem paga."""
+    endereco = client.post(
+        f"/customers/{customer['id']}/addresses",
+        json={"street": "Rua A", "number": "10", "complement": "ap 2",
+              "district": "Centro", "city": "Campinas", "state": "SP",
+              "zip_code": "13000-000"},
+    ).json()
+    pedido = _pedido_com_boleto(client, admin_headers, customer, product)
+    r = client.get(f"/orders/{pedido['id']}/boleto")
+    assert r.status_code == 200, r.text
+    ficha = r.json()
+
+    # Os números são os MESMOS do pedido: a ficha não reemite nada.
+    assert ficha["digitable_line"] == pedido["boleto_digitable_line"]
+    assert ficha["barcode"] == pedido["boleto_barcode"]
+    assert ficha["due_date"] == pedido["boleto_due_date"]
+    assert ficha["amount"] == pedido["total"]
+
+    assert ficha["beneficiary"]["name"] == "Sebo On-Line LTDA"
+    assert ficha["beneficiary"]["document"] == "12345678000199"
+    assert "Rua das Livrarias" in ficha["beneficiary"]["address"]
+    assert ficha["payer"]["name"] == customer["name"]
+    assert ficha["bank_code"] == "341" and ficha["wallet"] == "109"
+
+    # E o carimbo: o PDF sai convincente, e não pode passar por cobrança real.
+    assert ficha["demonstration"] is True
+    assert endereco["id"]
+
+
+def test_a_ficha_desenha_o_endereco_do_pedido(
+    client, admin_headers, customer, product
+):
+    end = client.post(
+        f"/customers/{customer['id']}/addresses",
+        json={"street": "Rua A", "number": "10", "district": "Centro",
+              "city": "Campinas", "state": "SP", "zip_code": "13000-000",
+              "is_default": True},
+    ).json()
+    _configurar(client, admin_headers)
+    _add(client, customer["id"], product, 1)
+    pedido = client.post(
+        "/orders/checkout",
+        json={"customer_id": customer["id"], "method": "boleto",
+              "address_id": end["id"]},
+    ).json()
+
+    ficha = client.get(f"/orders/{pedido['id']}/boleto").json()
+    assert "Rua A 10" in ficha["payer"]["address"]
+    assert "Campinas" in ficha["payer"]["address"]
+
+
+def test_a_ficha_de_outro_cliente_e_recusada(client, admin_headers, customer, product):
+    """A ficha leva nome, CPF e endereço de quem paga: id sequencial não basta."""
+    from tests.conftest import register_customer
+
+    pedido = _pedido_com_boleto(client, admin_headers, customer, product)
+    del client.headers["Authorization"]
+    assert client.get(f"/orders/{pedido['id']}/boleto").status_code in (401, 403)
+
+    register_customer(client)  # agora o client é outra pessoa
+    assert client.get(f"/orders/{pedido['id']}/boleto").status_code == 403
+
+
+def test_pedido_sem_boleto_nao_tem_ficha(
+    client, admin_headers, customer, product, fake_initiator
+):
+    _configurar(client, admin_headers)
+    _add(client, customer["id"], product, 1)
+    pedido = client.post(
+        "/orders/checkout",
+        json={"customer_id": customer["id"], "method": "card",
+              "card": {"number": "4111111111111111", "holder": "F",
+                       "expiry": "12/30", "cvv": "123"}},
+    ).json()
+    assert client.get(f"/orders/{pedido['id']}/boleto").status_code == 409
+
+
+def test_ficha_de_pedido_inexistente_e_404(client, customer):
+    assert client.get("/orders/999999/boleto").status_code == 404

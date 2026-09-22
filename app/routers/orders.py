@@ -41,13 +41,15 @@ from ..integration import (
     is_configured,
     pix_qr_available,
 )
-from ..models import Cart, CartItem, Customer, Order, OrderItem, PaymentMethod, Product
+from ..models import (
+    Address, Cart, CartItem, Customer, Order, OrderItem, PaymentMethod, Product,
+)
 from ..omnicommerce import enqueue_order_event, flush_in_background
 from ..payments import PaymentInitiatorError
 from ..pix import build_br_code
 from ..routers.devices import get_device
-from ..schemas import CheckoutIn, OrderOut
-from ..serializers import order_to_out
+from ..schemas import BoletoDocumentOut, BoletoPartyOut, CheckoutIn, OrderOut
+from ..serializers import linha_formatada, order_to_out
 
 router = APIRouter(prefix="/orders", tags=["pedidos"])
 
@@ -545,3 +547,65 @@ def cancel_order(
     session.refresh(order)
     _notify_omnicommerce(session, order, background)
     return order_to_out(order, _items_of(session, order))
+
+
+def _endereco_em_linha(*partes: str) -> str:
+    """Endereço numa linha só. A ficha tem uma linha; o cadastro tem seis."""
+    logradouro = " ".join(p.strip() for p in partes[:3] if p and p.strip())
+    resto = " - ".join(p.strip() for p in partes[3:] if p and p.strip())
+    return " - ".join(p for p in (logradouro, resto) if p)
+
+
+@router.get("/{order_id}/boleto", response_model=BoletoDocumentOut)
+def boleto_document(
+    order_id: int,
+    session: Session = Depends(get_session),
+    customer: Customer = Depends(current_customer),
+) -> BoletoDocumentOut:
+    """A ficha do boleto, para imprimir ou salvar em PDF.
+
+    Autenticada e só para o dono do pedido: a resposta leva nome, documento e
+    endereço do pagador. ``GET /orders/{id}`` é aberta porque devolve o pedido;
+    esta não pode ser, porque devolve a pessoa.
+    """
+    order = session.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    ensure_self(customer, order.customer_id)
+    if order.payment_method != "boleto" or not order.boleto_digitable_line:
+        raise HTTPException(status_code=409, detail="Este pedido não tem boleto")
+
+    cfg = get_integration(session)
+    endereco_pagador = ""
+    if order.address_id:
+        end = session.get(Address, order.address_id)
+        if end:
+            endereco_pagador = _endereco_em_linha(
+                end.street, end.number, end.complement,
+                end.district, end.city, end.state, end.zip_code)
+
+    return BoletoDocumentOut(
+        order_id=order.id,
+        amount=order.total,
+        issued_at=order.created_at,
+        due_date=order.boleto_due_date,
+        beneficiary=BoletoPartyOut(
+            name=cfg.sebo_name,
+            document=cfg.sebo_cpf_cnpj,
+            address=_endereco_em_linha(
+                cfg.sebo_street, cfg.sebo_number, cfg.sebo_complement,
+                cfg.sebo_district, cfg.sebo_city, cfg.sebo_state, cfg.sebo_zip_code),
+        ),
+        payer=BoletoPartyOut(
+            name=customer.name, document=customer.cpf, address=endereco_pagador),
+        bank_code=cfg.boleto_bank_code,
+        bank_name=cfg.boleto_bank_name,
+        agency=cfg.boleto_agency,
+        account=cfg.boleto_account,
+        wallet=cfg.boleto_wallet,
+        digitable_line=order.boleto_digitable_line,
+        digitable_line_formatted=linha_formatada(order.boleto_digitable_line),
+        barcode=order.boleto_barcode,
+        our_number=order.boleto_our_number,
+        instructions=cfg.boleto_instructions,
+    )

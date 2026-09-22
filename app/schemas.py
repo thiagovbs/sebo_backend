@@ -283,3 +283,59 @@ class OrderOut(BaseModel):
     boleto_our_number: str = ""
     boleto_due_date: str = Field(
         default="", description="Vencimento em ISO (YYYY-MM-DD).")
+
+
+# ---------------------------------------------------------------------------
+# Ficha do boleto
+# ---------------------------------------------------------------------------
+
+
+class BoletoPartyOut(BaseModel):
+    """Quem paga e quem recebe, como o documento os imprime."""
+
+    name: str = ""
+    document: str = Field(default="", description="CPF ou CNPJ, só dígitos.")
+    address: str = Field(
+        default="", description="Endereço em uma linha, pronto para imprimir.")
+
+
+class BoletoDocumentOut(BaseModel):
+    """Tudo o que a ficha de compensação precisa, numa resposta só.
+
+    Existe porque o pedido devolve apenas a linha digitável: os dados do
+    beneficiário (razão social, CNPJ, banco, agência, conta, carteira) estão em
+    ``GET /admin/integration``, que é rota de admin -- o cliente não pode
+    chamá-la, e é dele o boleto.
+
+    Ao contrário de ``GET /orders/{id}``, esta rota **exige o cliente dono do
+    pedido**: aqui vão nome, documento e endereço do pagador, e uma ficha por
+    id sequencial sem autenticação seria um vazamento de dado pessoal.
+    """
+
+    order_id: int
+    amount: float
+    issued_at: datetime
+    due_date: str = Field(default="", description="Vencimento em ISO (YYYY-MM-DD).")
+
+    beneficiary: BoletoPartyOut
+    payer: BoletoPartyOut
+
+    bank_code: str = ""
+    bank_name: str = ""
+    agency: str = ""
+    account: str = ""
+    wallet: str = ""
+
+    digitable_line: str = Field(default="", description="47 dígitos, sem pontuação.")
+    digitable_line_formatted: str = ""
+    barcode: str = Field(default="", description="44 dígitos, o que vira as barras.")
+    our_number: str = ""
+    instructions: str = ""
+
+    demonstration: bool = Field(
+        default=True,
+        description="Boleto de demonstração: não é registrado em banco nenhum e"
+        " não pode ser pago. O documento carimba isso, para um PDF convincente"
+        " não levar alguém a tentar pagá-lo.",
+    )
+

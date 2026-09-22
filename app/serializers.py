@@ -35,14 +35,18 @@ def order_to_out(order: Order, items: list[OrderItem]) -> OrderOut:
         boleto_digitable_line=order.boleto_digitable_line,
         # A versão pontuada é derivada na saída, e não guardada: são os mesmos
         # 47 dígitos, e duas cópias do mesmo dado divergem na primeira correção.
-        boleto_digitable_line_formatted=_formatada(order.boleto_digitable_line),
+        boleto_digitable_line_formatted=linha_formatada(order.boleto_digitable_line),
         boleto_barcode=order.boleto_barcode,
         boleto_our_number=order.boleto_our_number,
         boleto_due_date=order.boleto_due_date,
     )
 
 
-def _formatada(linha: str) -> str:
+def linha_formatada(linha: str) -> str:
+    """A linha digitável com a pontuação em que ela é impressa.
+
+    Pública porque a ficha do boleto imprime a mesma linha do pedido: duas
+    pontuações diferentes para o mesmo número confundiriam quem confere."""
     if not linha:
         return ""
     try:
