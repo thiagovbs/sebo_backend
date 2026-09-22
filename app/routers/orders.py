@@ -44,7 +44,7 @@ from ..integration import (
 from ..models import (
     Address, Cart, CartItem, Customer, Order, OrderItem, PaymentMethod, Product,
 )
-from ..omnicommerce import enqueue_order_event, flush_in_background
+from ..omnicommerce import descartar_avisos, enqueue_order_event, flush_in_background
 from ..payments import PaymentInitiatorError
 from ..pix import build_br_code
 from ..routers.devices import get_device
@@ -287,6 +287,12 @@ def checkout(
         except BoletoError as exc:
             # Desfaz o pedido: melhor não existir do que existir sem boleto,
             # esperando um pagamento que ninguém consegue fazer.
+            #
+            # O aviso ao omnicommerce ainda não foi enfileirado aqui (ele sai
+            # depois dos itens), mas o descarte é chamado assim mesmo: quem
+            # apaga um pedido não pode depender da ordem das linhas acima para
+            # não deixar um aviso apontando para o que não existe mais.
+            descartar_avisos(session, order.id)
             session.delete(order)
             session.commit()
             raise HTTPException(

@@ -279,7 +279,11 @@ class OutboxNotification(SQLModel, table=True):
     # Vai no campo ``sent`` do aviso e é estável entre tentativas: é o que dá
     # identidade ao evento do outro lado, evitando duplicar na repetição.
     sent_at: datetime = Field(default_factory=_now)
-    status: str = Field(default="PENDING", index=True)  # PENDING | DELIVERED | FAILED
+    # PENDING | DELIVERED | FAILED | DISCARDED. DISCARDED é o aviso que não
+    # deve mais sair: o pedido dele foi apagado, ou ele ficou velho demais na
+    # fila. Não é falha -- não há nada a corrigir, e por isso ele não conta
+    # como tal.
+    status: str = Field(default="PENDING", index=True)
     attempts: int = 0
     next_attempt_at: datetime = Field(default_factory=_now, index=True)
     last_error: str = ""

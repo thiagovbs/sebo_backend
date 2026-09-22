@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     store_id: str = "sebo_online"
     # Quantas vezes insistir antes de marcar o aviso como falho.
     notification_max_attempts: int = 8
+    # Idade máxima de um aviso na fila. Existe porque a fila só é esvaziada
+    # quando alguém compra: uma loja que fica dias fora do ar despejava, na
+    # primeira venda seguinte, toda a história acumulada -- e a venda nova ia
+    # para o fim de uma fila de avisos velhos. Passado o prazo, o aviso é
+    # descartado: pedido antigo entra pela conciliação, que é para isso.
+    notification_max_age_days: int = 3
 
     model_config = SettingsConfigDict(
         env_file=".env",

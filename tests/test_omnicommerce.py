@@ -280,6 +280,86 @@ def test_notification_gives_up_after_the_attempt_ceiling(
     assert aviso.attempts >= settings.notification_max_attempts
 
 
+def test_notification_of_a_deleted_order_is_discarded_instead_of_sent(
+    client, customer, product, fake_initiator, integracao
+):
+    """Aviso de pedido apagado não sai da fila.
+
+    Do outro lado, o aviso vira uma consulta ao pedido -- que responde 404 e
+    deixa lá uma falha permanente que ninguém consegue resolver. Aconteceu de
+    verdade: 224 eventos assim, e a venda nova esperando atrás deles.
+    """
+    integracao.status_code = 500  # segura o aviso na fila
+    pedido = _comprar(client, customer, product, fake_initiator)
+
+    with Session(engine) as session:
+        # O pedido some (rollback de emissão, limpeza, o que for).
+        session.delete(session.get(Order, pedido["id"]))
+        session.commit()
+
+    integracao.chamadas.clear()
+    integracao.status_code = 200
+    with Session(engine) as session:
+        aviso = session.exec(
+            select(OutboxNotification)
+            .where(OutboxNotification.order_id == pedido["id"])
+            .where(OutboxNotification.status == "PENDING")
+        ).one()
+        aviso_id = aviso.id
+        aviso.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        session.add(aviso)
+        session.commit()
+        resultado = omni.flush(session)
+
+    assert resultado["discarded"] >= 1 and resultado["delivered"] == 0
+    # E nada foi enviado: o destino nem fica sabendo.
+    assert integracao.chamadas == []
+    with Session(engine) as session:
+        aviso = session.get(OutboxNotification, aviso_id)
+    assert aviso.status == "DISCARDED"
+    assert aviso.last_error == "ORDER_GONE"
+    # Descarte não é falha: não há o que corrigir, e a tentativa não é gasta.
+    assert aviso.attempts == 1
+
+
+def test_a_notification_that_aged_in_the_queue_is_dropped(
+    client, customer, product, fake_initiator, integracao
+):
+    """A fila só é esvaziada quando alguém compra.
+
+    Uma loja dias fora do ar despejava, na primeira venda seguinte, toda a
+    história acumulada -- e a venda nova ia para o fim dessa fila. Passado o
+    prazo, o aviso velho é descartado; pedido antigo entra pela conciliação.
+    """
+    integracao.status_code = 500
+    pedido = _comprar(client, customer, product, fake_initiator)
+
+    # Pelo id do aviso, e não pelo do pedido: o SQLite reaproveita o id de um
+    # pedido apagado, e o teste acima apaga um.
+    with Session(engine) as session:
+        aviso = session.exec(
+            select(OutboxNotification)
+            .where(OutboxNotification.order_id == pedido["id"])
+            .where(OutboxNotification.status == "PENDING")
+        ).one()
+        aviso_id = aviso.id
+        antigo = datetime.now(timezone.utc) - timedelta(
+            days=settings.notification_max_age_days + 1)
+        aviso.created_at = antigo
+        aviso.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        session.add(aviso)
+        session.commit()
+
+    integracao.chamadas.clear()
+    integracao.status_code = 200
+    with Session(engine) as session:
+        assert omni.flush(session)["discarded"] >= 1
+        aviso = session.get(OutboxNotification, aviso_id)
+    assert aviso.status == "DISCARDED" and aviso.last_error == "TOO_OLD"
+    # E nada deste pedido foi enviado.
+    assert all(f"/orders/{pedido['id']}" != c["json"]["resource"] for c in integracao.chamadas)
+
+
 def test_flush_endpoint_requires_the_service_token(client, integracao, service_headers):
     assert client.post("/integration/outbox/flush").status_code == 401
     r = client.post("/integration/outbox/flush", headers=service_headers)

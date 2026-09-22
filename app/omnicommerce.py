@@ -58,6 +58,26 @@ def _payload(notification: OutboxNotification) -> dict:
     }
 
 
+def descartar_avisos(session: Session, order_id: int) -> int:
+    """Descarta os avisos pendentes de um pedido que deixou de existir.
+
+    Chamado onde um pedido é apagado. O aviso carrega só a referência -- quem
+    o recebe volta para ler o pedido -- então um aviso de pedido apagado é um
+    convite para uma consulta que responde 404 do outro lado, e lá vira falha
+    que ninguém consegue corrigir.
+    """
+    pendentes = session.exec(
+        select(OutboxNotification)
+        .where(OutboxNotification.order_id == order_id)
+        .where(OutboxNotification.status == "PENDING")
+    ).all()
+    for aviso in pendentes:
+        aviso.status = "DISCARDED"
+        aviso.last_error = "ORDER_GONE"
+        session.add(aviso)
+    return len(pendentes)
+
+
 def _deliver(notification: OutboxNotification) -> None:
     response = httpx.post(
         settings.omnicommerce_webhook_url,
@@ -82,10 +102,30 @@ def flush(session: Session, limit: int = 20) -> dict:
         .limit(limit)
     ).all()
 
-    delivered = failed = 0
+    delivered = failed = discarded = 0
+    limite_de_idade = now - timedelta(days=settings.notification_max_age_days)
     for notification in pending:
         if _as_utc(notification.next_attempt_at) > now:
             continue
+
+        # Duas guardas ANTES de enviar. As duas nasceram do mesmo estrago: a
+        # fila guardava avisos de pedidos que não existiam mais, e o destino
+        # os recebia, voltava para ler o pedido e levava 404 -- uma falha por
+        # aviso, permanente, que nenhuma tela do outro lado sabia resolver. E
+        # eles iam na frente da venda recém-feita, que esperava a fila inteira.
+        if _as_utc(notification.created_at) < limite_de_idade:
+            notification.status = "DISCARDED"
+            notification.last_error = "TOO_OLD"
+            session.add(notification)
+            discarded += 1
+            continue
+        if session.get(Order, notification.order_id) is None:
+            notification.status = "DISCARDED"
+            notification.last_error = "ORDER_GONE"
+            session.add(notification)
+            discarded += 1
+            continue
+
         notification.attempts += 1
         try:
             _deliver(notification)
@@ -109,7 +149,7 @@ def flush(session: Session, limit: int = 20) -> dict:
             delivered += 1
         session.add(notification)
     session.commit()
-    return {"delivered": delivered, "failed": failed}
+    return {"delivered": delivered, "failed": failed, "discarded": discarded}
 
 
 def flush_in_background() -> None:
