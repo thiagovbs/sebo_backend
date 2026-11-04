@@ -59,6 +59,26 @@ def test_soft_delete_hides_from_the_showcase(client, admin_headers):
     assert client.get(f"/products/{pid}").json()["active"] is False
 
 
+def test_reactivating_a_product_brings_it_back_to_the_showcase(client, admin_headers):
+    pid = client.post(
+        "/products",
+        headers=admin_headers,
+        json={"name": "Volta", "category": "X", "price": 1, "stock": 1},
+    ).json()["id"]
+    client.delete(f"/products/{pid}", headers=admin_headers)
+
+    # É o que o painel faz: reenvia o produto como está, só com active=true.
+    atual = client.get(f"/products/{pid}").json()
+    atual.pop("id")
+    atual.pop("created_at")
+    r = client.put(
+        f"/products/{pid}", headers=admin_headers, json={**atual, "active": True}
+    )
+    assert r.status_code == 200 and r.json()["active"] is True
+    ids = [p["id"] for p in client.get("/products", params={"page_size": 100}).json()["items"]]
+    assert pid in ids
+
+
 def test_pagination_reports_total_independent_of_page_size(client):
     total = client.get("/products", params={"page_size": 1}).json()["total"]
     assert total >= 16
