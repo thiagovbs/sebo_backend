@@ -31,6 +31,7 @@ from ..integration import (
 )
 from ..omnicommerce import enqueue_order_event, flush_in_background
 from ..payments import PaymentInitiatorError
+from .devices import revoke_device
 from ..models import (
     Address,
     Customer,
@@ -446,24 +447,7 @@ def delete_customer_device(
     customer = session.get(Customer, customer_id)
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
-    device = session.exec(
-        select(Device).where(Device.customer_id == customer_id)
-    ).first()
-    initiator_revoked = None
-    if device:
-        # Revoga também na iniciadora (best-effort): remove o vínculo lá e pede a
-        # revogação na detentora. Uma falha aqui não bloqueia a limpeza local.
-        if device.enrollment_id:
-            cfg = get_integration(session)
-            if is_configured(cfg):
-                try:
-                    get_client(cfg).revoke_enrollment(device.enrollment_id)
-                    initiator_revoked = True
-                except PaymentInitiatorError:
-                    initiator_revoked = False
-        session.delete(device)
-        session.commit()
-    return {"enrolled": False, "initiator_revoked": initiator_revoked}
+    return revoke_device(session, customer_id)
 
 
 def _as_date(value: datetime) -> date:

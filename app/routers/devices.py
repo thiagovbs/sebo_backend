@@ -135,3 +135,38 @@ def enroll_device(
     session.commit()
 
     return {"enrollment_id": result["enrollment_id"], "login_url": result["login_url"]}
+
+
+def revoke_device(session: Session, customer_id: int) -> dict:
+    """Apaga a autorização de pagamento do cliente, na loja e (se der) na iniciadora.
+
+    Remove o ``Device`` (o ``enrollment_id`` usado em ``/payments/jsr``): o cliente
+    volta a "não autorizado" e pode autorizar de novo. A revogação na iniciadora
+    é best-effort -- uma falha lá não impede a limpeza local, mas é informada em
+    ``initiator_revoked`` (``None`` quando não havia o que revogar).
+    """
+    device = get_device(session, customer_id)
+    initiator_revoked = None
+    if device:
+        if device.enrollment_id:
+            cfg = get_integration(session)
+            if is_configured(cfg):
+                try:
+                    get_client(cfg).revoke_enrollment(device.enrollment_id)
+                    initiator_revoked = True
+                except PaymentInitiatorError:
+                    initiator_revoked = False
+        session.delete(device)
+        session.commit()
+    return {"enrolled": False, "initiator_revoked": initiator_revoked}
+
+
+@router.delete("/{customer_id}/device")
+def revoke_own_device(
+    customer_id: int,
+    session: Session = Depends(get_session),
+    customer: Customer = Depends(current_customer),
+) -> dict:
+    """O próprio cliente desativa o pagamento por PIX Open Finance (JSR)."""
+    ensure_self(customer, customer_id)
+    return revoke_device(session, customer_id)

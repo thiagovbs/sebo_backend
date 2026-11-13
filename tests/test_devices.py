@@ -61,3 +61,32 @@ def test_delete_device_requires_admin(client, customer, fake_initiator):
     client.post(f"/customers/{customer['id']}/device/enroll")
     # Sem token de admin (o header padrão é o do cliente) -> negado.
     assert client.delete(f"/admin/customers/{customer['id']}/device").status_code == 401
+
+
+def test_customer_can_deactivate_own_authorization(client, customer, fake_initiator):
+    eid = client.post(f"/customers/{customer['id']}/device/enroll").json()["enrollment_id"]
+    fake_initiator.register(eid)
+
+    r = client.delete(f"/customers/{customer['id']}/device")
+    assert r.status_code == 200
+    assert r.json() == {"enrolled": False, "initiator_revoked": True}
+    assert client.get(f"/customers/{customer['id']}/device").json()["enrolled"] is False
+    # revogada também na iniciadora
+    assert eid not in fake_initiator._devices
+
+    # e dá para autorizar de novo
+    again = client.post(f"/customers/{customer['id']}/device/enroll")
+    assert again.status_code == 200
+
+
+def test_deactivate_survives_initiator_being_down(client, customer, fake_initiator):
+    client.post(f"/customers/{customer['id']}/device/enroll")
+    fake_initiator.down = True
+    r = client.delete(f"/customers/{customer['id']}/device")
+    assert r.status_code == 200
+    assert r.json()["initiator_revoked"] is False
+    assert client.get(f"/customers/{customer['id']}/device").json()["enrolled"] is False
+
+
+def test_customer_cannot_deactivate_someone_elses_authorization(client, customer, fake_initiator):
+    assert client.delete(f"/customers/{customer['id'] + 999}/device").status_code == 403
